@@ -17,7 +17,7 @@ import androidx.compose.ui.window.ComposeUIViewController
 import io.ymusic.download.DefaultDownloadStorage
 import io.ymusic.download.DownloadService
 import io.ymusic.download.DownloadStore
-import io.ymusic.download.NativeMp4Muxer
+import io.ymusic.download.NativeMediaMuxer
 import io.ymusic.download.downloadDatabaseNativeDriver
 import io.ymusic.dynamicengine.DynamicEngineManager
 import io.ymusic.dynamicengine.EMBEDDED_ENGINE_JS_VERSION
@@ -77,10 +77,13 @@ import kmphttp.RedirectOptions
 import kmphttp.create
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.newSingleThreadContext
 import kotlinx.coroutines.withContext
 import okio.FileSystem
 import okio.Path.Companion.toPath
@@ -151,7 +154,7 @@ private fun Center(content: @Composable () -> Unit) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { content() }
 }
 
-@OptIn(ExperimentalForeignApi::class)
+@OptIn(DelicateCoroutinesApi::class, ExperimentalCoroutinesApi::class, ExperimentalForeignApi::class)
 private suspend fun buildIosGraph(container: UIView): AppGraph {
     val logDir = (NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, true).first() as String)
         .toPath()
@@ -333,8 +336,28 @@ private suspend fun buildIosGraph(container: UIView): AppGraph {
         },
         userAgent = MSE_CHROME_UA,
         ffmpeg = null,
-        nativeMp4Muxer = NativeMp4Muxer { videoPath, audioPath, outputPath, title, artist, videoId ->
-            withContext(Dispatchers.Default.limitedParallelism(1)) {
+        nativeMediaMuxer = object : NativeMediaMuxer {
+            private val dispatcher = newSingleThreadContext("download-mux")
+
+            override suspend fun muxM4a(
+                audioPath: String,
+                coverPath: String?,
+                outputPath: String,
+                title: String,
+                artist: String?,
+                videoId: String,
+            ) = withContext(dispatcher) {
+                MseHostNative.muxM4a(audioPath, coverPath, outputPath, title, artist, videoId)
+            }
+
+            override suspend fun muxMp4(
+                videoPath: String,
+                audioPath: String,
+                outputPath: String,
+                title: String,
+                artist: String?,
+                videoId: String,
+            ) = withContext(dispatcher) {
                 MseHostNative.muxMp4(videoPath, audioPath, outputPath, title, artist, videoId)
             }
         },

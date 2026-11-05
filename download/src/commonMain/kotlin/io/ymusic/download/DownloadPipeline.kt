@@ -41,8 +41,10 @@ class ResolvedVideo(val spec: SabrStreamSpec, val artist: String? = null)
  * The final scratch is marked ready before step 4, so a run that fails only to publish is retried from
  * step 4 alone (the scratch folder outlives the failure; only cancel or a successful publish deletes it).
  */
-fun interface NativeMp4Muxer {
-    suspend fun mux(videoPath: String, audioPath: String, outputPath: String, title: String, artist: String?, videoId: String)
+interface NativeMediaMuxer {
+    suspend fun muxM4a(audioPath: String, coverPath: String?, outputPath: String, title: String, artist: String?, videoId: String)
+
+    suspend fun muxMp4(videoPath: String, audioPath: String, outputPath: String, title: String, artist: String?, videoId: String)
 }
 
 class DownloadPipeline(
@@ -50,7 +52,7 @@ class DownloadPipeline(
     client: KmpHttpClient,
     userAgent: String,
     private val ffmpeg: Ffmpeg?,
-    private val nativeMp4Muxer: NativeMp4Muxer?,
+    private val nativeMediaMuxer: NativeMediaMuxer?,
     private val storage: DownloadStorage,
     mediaCache: MediaCache?,
     segmentIndex: SegmentIndex?,
@@ -98,16 +100,32 @@ class DownloadPipeline(
 
         onProcessing()
 
-        // No-ffmpeg M4A (iOS): the raw best-AAC stream IS a playable .m4a — publish it as-is, no step 2
-        // (metadata lives in the DB task row). Captions can't be muxed without ffmpeg here, so drop them.
         if (task.format == DownloadFormat.M4A && ffmpeg == null) {
-            return publish(task, markReady(task.id, AUDIO_SCRATCH, audioFmt, null), destinationFolder)
-        }
-
-        if (task.format == DownloadFormat.VIDEO_MP4 && ffmpeg == null && nativeMp4Muxer != null) {
+            val muxer = nativeMediaMuxer
+                ?: return publish(task, markReady(task.id, AUDIO_SCRATCH, audioFmt, null), destinationFolder)
             val out = storage.scratch(task.id, OUT_SCRATCH)
             out.delete()
-            nativeMp4Muxer.mux(streams.video!!.scratch.path, streams.audio.scratch.path, out.path, task.title, task.artist ?: streams.artist, task.videoId)
+            val cover = coverArt.fetch(task)
+            try {
+                muxer.muxM4a(streams.audio.scratch.path, cover?.path, out.path, task.title, task.artist ?: streams.artist, task.videoId)
+            } catch (e: TechnicalException) {
+                if (cover == null) throw e
+                logger?.log(Logger.Level.WARN, "native M4A mux failed with cover art; retrying without it", e)
+                out.delete()
+                try {
+                    muxer.muxM4a(streams.audio.scratch.path, null, out.path, task.title, task.artist ?: streams.artist, task.videoId)
+                } catch (retryError: Throwable) {
+                    retryError.addSuppressed(e)
+                    throw retryError
+                }
+            }
+            return publish(task, markReady(task.id, OUT_SCRATCH, audioFmt, null), destinationFolder)
+        }
+
+        if (task.format == DownloadFormat.VIDEO_MP4 && ffmpeg == null && nativeMediaMuxer != null) {
+            val out = storage.scratch(task.id, OUT_SCRATCH)
+            out.delete()
+            nativeMediaMuxer.muxMp4(streams.video!!.scratch.path, streams.audio.scratch.path, out.path, task.title, task.artist ?: streams.artist, task.videoId)
             return publish(task, markReady(task.id, OUT_SCRATCH, audioFmt, videoFmt), destinationFolder)
         }
 

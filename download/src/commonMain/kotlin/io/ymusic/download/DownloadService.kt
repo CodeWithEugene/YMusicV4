@@ -52,7 +52,7 @@ class DownloadService(
     client: KmpHttpClient,
     userAgent: String,
     ffmpeg: Ffmpeg?,
-    nativeMp4Muxer: NativeMp4Muxer? = null,
+    nativeMediaMuxer: NativeMediaMuxer? = null,
     private val storage: DownloadStorage,
     /** How many downloads run at once — the concurrent byte-download + ffmpeg work. Player-response
      *  fetches are paced separately ([PlayerResponseGate]). */
@@ -78,7 +78,7 @@ class DownloadService(
         },
         videoFormats = when {
             ffmpeg != null -> listOf(DownloadFormat.VIDEO_MP4, DownloadFormat.VIDEO_WEBM)
-            nativeMp4Muxer != null -> listOf(DownloadFormat.VIDEO_MP4)
+            nativeMediaMuxer != null -> listOf(DownloadFormat.VIDEO_MP4)
             else -> emptyList()
         },
         captions = ffmpeg != null,
@@ -91,7 +91,7 @@ class DownloadService(
 
     private val pipeline = DownloadPipeline(
         SabrSpecResolver { videoId -> playerGate.run { resolver.resolve(videoId) } },
-        client, userAgent, ffmpeg, nativeMp4Muxer, storage, mediaCache, segmentIndex, logger,
+        client, userAgent, ffmpeg, nativeMediaMuxer, storage, mediaCache, segmentIndex, logger,
     )
 
     private val _changes = MutableSharedFlow<DownloadChange>(
