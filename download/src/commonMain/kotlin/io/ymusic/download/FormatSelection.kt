@@ -117,7 +117,7 @@ internal object FormatSelection {
         val playable = formats.filter { it.isVideo && it.clen > 0 && it.height != null }
         return when (container) {
             DownloadFormat.VIDEO_WEBM -> playable.filter { isWebmVideo(it.mimeType) }
-            DownloadFormat.VIDEO_MP4 -> playable.filter { it.mimeType.contains("mp4") }
+            DownloadFormat.VIDEO_MP4 -> playable.filter { it.mimeType.contains("mp4") && !it.mimeType.contains("av01") }
             else -> playable
         }
     }

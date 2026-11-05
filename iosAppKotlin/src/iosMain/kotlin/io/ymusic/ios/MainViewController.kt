@@ -334,7 +334,7 @@ private suspend fun buildIosGraph(container: UIView): AppGraph {
         userAgent = MSE_CHROME_UA,
         ffmpeg = null,
         nativeMp4Muxer = NativeMp4Muxer { videoPath, audioPath, outputPath, title, artist, videoId ->
-            withContext(Dispatchers.Default) {
+            withContext(Dispatchers.Default.limitedParallelism(1)) {
                 MseHostNative.muxMp4(videoPath, audioPath, outputPath, title, artist, videoId)
             }
         },
