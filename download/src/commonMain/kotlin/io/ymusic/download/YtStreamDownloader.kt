@@ -70,8 +70,8 @@ class DownloadedStreams(
  *     which drives the WebView.
  *  2. picks the concrete audio/video [AdaptiveFormat]s for the task and the caption tracks for [captions].
  *  3. streams each audio/video track to its own scratch file over SABR — resumable (the scratch's
- *     on-disk length is the resume point, on the streams the task remembers), re-attesting once if the
- *     PO token is rejected mid-stream.
+ *     on-disk length is the resume point, on the streams the task remembers), re-attesting with a bounded
+ *     retry if the PO token is rejected mid-stream.
  *  4. fetches each selected caption over plain HTTP (its baseUrl carries the content PO token, see
  *     [timedTextUrl]) into a scratch file.
  *
@@ -211,10 +211,10 @@ class YtStreamDownloader(
     }
 
     /**
-     * Run the SABR download, re-priming a fresh spec once if the PO token is rejected mid-stream. Each
-     * session records its segments in [segmentIndex] and seeds its resume cursor from the on-disk file
-     * length via that index — so pause/resume and re-attest continue from the last segment (see
-     * [SabrSession.download]), rather than re-fetching from zero.
+     * Run the SABR download, re-priming a fresh spec up to [MAX_PO_TOKEN_RETRIES] times if the PO token
+     * is rejected mid-stream. Each session records its segments in [segmentIndex] and seeds its resume
+     * cursor from the on-disk file length via that index — so pause/resume and re-attest continue from
+     * the last segment (see [SabrSession.download]), rather than re-fetching from zero.
      */
     private suspend fun downloadTracks(
         spec: SabrStreamSpec,
@@ -227,7 +227,8 @@ class YtStreamDownloader(
     ) {
         val progress = SabrProgress { aDone, aLen, vDone, vLen -> onProgress(aDone + vDone, aLen + vLen) }
         var current = spec
-        var invalid: SabrPoTokenInvalid? = null
+        var retries = 0
+        var firstInvalid: SabrPoTokenInvalid? = null
         while (true) {
             try {
                 SabrSession(logger = log).download(
@@ -243,12 +244,10 @@ class YtStreamDownloader(
                 )
                 return
             } catch (e: SabrPoTokenInvalid) {
-                invalid?.let {
-                    e.addSuppressed(it)
-                    throw sabrFailure(e)
-                }
-                invalid = e
-                log?.log(Logger.Level.WARN, "PO token invalid, re-attesting: ${e.message}")
+                firstInvalid?.let(e::addSuppressed) ?: run { firstInvalid = e }
+                if (retries >= MAX_PO_TOKEN_RETRIES) throw sabrFailure(e)
+                retries++
+                log?.log(Logger.Level.WARN, "PO token invalid, re-attesting ($retries/$MAX_PO_TOKEN_RETRIES): ${e.message}")
                 current = try {
                     reAttest()
                 } catch (error: Throwable) {
@@ -263,6 +262,8 @@ class YtStreamDownloader(
         }
     }
 }
+
+private const val MAX_PO_TOKEN_RETRIES = 3
 
 /** An uncoded SABR session failure as its site code; coded, network and disk-full failures pass through. */
 private fun sabrFailure(error: Throwable): Throwable = when {

@@ -138,8 +138,10 @@ class SabrSession(
 
         try {
             while (true) {
+                if (!poTokenValid) {
+                    throw SabrPoTokenInvalid("PO token invalid (StreamProtectionStatus=3); re-attest and retry")
+                }
                 if (retryCount > maxConsecutiveEmptyRounds) {
-                    if (!poTokenValid) throw SabrPoTokenInvalid("PO token invalid (StreamProtectionStatus=3); re-attest and retry")
                     if (lastProtectionStatus == 2) {
                         throw SabrAttestationPending("SABR withheld media while attestation stayed pending (StreamProtectionStatus=2)")
                     }
@@ -223,6 +225,7 @@ class SabrSession(
                 }
                 if (isComplete(audio, video)) { emitProgress(force = true); return }
 
+                if (outcome.protectionStatus == 3) poTokenValid = false
                 if (outcome.completedSegments == 0) {
                     retryCount++
                     lastError = "received zero segments"
@@ -418,8 +421,9 @@ class SabrSession(
                     UmpPart.STREAM_PROTECTION_STATUS -> {
                         val status = SabrParts.parseStreamProtectionStatus(body.readBytesFully(partSize))
                         protectionStatus = status
-                        // 1 = ok, 2 = attestation pending (a verdict follows), 3 = invalid PO token.
-                        if (status != null && status != 2) poTokenValid = status != 3
+                        // A 3 remains terminal for this session even if the same response carries media or
+                        // a later status. Only the caller can replace the rejected token with a fresh spec.
+                        if (status == 3) poTokenValid = false
                     }
 
                     UmpPart.SABR_CONTEXT_UPDATE -> {
