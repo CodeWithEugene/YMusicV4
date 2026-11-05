@@ -5,7 +5,7 @@ import { debug } from "../../debug";
 import { JsEngineErrorImpl } from "../../protocol/command";
 
 const CACHE_MS = 3 * 60 * 1000;
-const WAIT_MS = 20_000;
+const WAIT_MS = 45_000;
 
 /** null = the entry is complete; else YouTube's non-OK playabilityStatus, which is never cached. */
 type Verdict = { status: string; reason: string } | null;
