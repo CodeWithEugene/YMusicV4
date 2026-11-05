@@ -45,14 +45,9 @@ kotlin {
         binaries.framework {
             baseName = "YMusicApp"
             isStatic = false
-            // Compose MP 1.11.1's ui-uikit links iOS 26 symbols (UIViewLayoutRegion), which need the
-            // iOS 26 SDK / Xcode 26. To build on an older Xcode, allow those undefined at link — Compose
-            // @available-guards their use, so they're never touched below iOS 26. Drop when on Xcode 26.
-            if (providers.gradleProperty("iosAllowUndefined").orNull == "true") {
-                linkerOpts("-undefined", "dynamic_lookup")
-            }
             linkerOpts("-framework", "MediaPlayer")
             linkerOpts("-framework", "LocalAuthentication")
+            linkerOpts("-lsqlite3")
             // Same as :playground: cinterop linkerOpts is ignored; bake libav + VT here.
             val lib = ffmpegSlug?.let {
                 rootProject.projectDir.parentFile.resolve("ffmpeg-build/out/$it/lib")
