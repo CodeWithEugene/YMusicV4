@@ -76,6 +76,63 @@ void mse_ios_log(const char *msg)
     (void)msg;
 }
 
+void mse_ios_recover_playback(void)
+{
+}
+
+void mse_ios_park_video(void)
+{
+}
+
+void mse_host_set_volume(void *h, float vol)
+{
+    (void)h;
+    (void)vol;
+}
+
+void mse_host_set_speed(void *h, float speed, float tempo)
+{
+    (void)h;
+    (void)speed;
+    (void)tempo;
+}
+
+float mse_host_playback_rate(void *h)
+{
+    (void)h;
+    return 1.0f;
+}
+
+void mse_host_set_pitch(void *h, float pitch)
+{
+    (void)h;
+    (void)pitch;
+}
+
+void mse_host_set_eq(void *h, const float *bands_db)
+{
+    (void)h;
+    (void)bands_db;
+}
+
+void mse_host_set_bass(void *h, float db)
+{
+    (void)h;
+    (void)db;
+}
+
+void mse_host_set_virtualizer(void *h, float width)
+{
+    (void)h;
+    (void)width;
+}
+
+void mse_host_set_preamp(void *h, float db)
+{
+    (void)h;
+    (void)db;
+}
+
 int mse_host_video_size(void *h, int *w, int *ht)
 {
     (void)h;
