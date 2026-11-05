@@ -14,6 +14,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.window.ComposeUIViewController
+import io.ymusic.download.DefaultDownloadStorage
+import io.ymusic.download.DownloadService
+import io.ymusic.download.DownloadStore
+import io.ymusic.download.NativeMp4Muxer
+import io.ymusic.download.downloadDatabaseNativeDriver
 import io.ymusic.dynamicengine.DynamicEngineManager
 import io.ymusic.dynamicengine.EMBEDDED_ENGINE_JS_VERSION
 import io.ymusic.dynamicengine.EMBEDDED_PLAYER_JS_VERSION
@@ -27,6 +32,10 @@ import io.ymusic.imageloader.networkFetcher
 import io.ymusic.logstore.DbLogger
 import io.ymusic.logstore.LogStore
 import io.ymusic.logstore.nativeLogDatabaseDriver
+import io.ymusic.mediastore.BetterMediaStore
+import io.ymusic.mediastore.mediaStoreNativeDriver
+import io.ymusic.mediastore.model.BucketDraft
+import io.ymusic.mse.MseHostNative
 import io.ymusic.mse.MseVideoSurface
 import io.ymusic.player.LocalPlayerContext
 import io.ymusic.player.PlayerEngines
@@ -45,9 +54,11 @@ import io.ymusic.ui.App
 import io.ymusic.ui.AppGraph
 import io.ymusic.ui.AppHttpClients
 import io.ymusic.ui.CatalogueScreen
+import io.ymusic.ui.YtEngineSabrSpecResolver
 import io.ymusic.ui.ensureAppLanguage
 import io.ymusic.ui.playhistory.PlayHistoryStore
 import io.ymusic.ui.playhistory.playHistoryNativeDriver
+import io.ymusic.ui.registerCompletedDownload
 import io.ymusic.ui.sponsorblock.SqliteSponsorBlockStore
 import io.ymusic.ui.sponsorblock.sponsorBlockNativeDriver
 import io.ymusic.ui.startupFailedMessage
@@ -59,6 +70,8 @@ import io.ymusic.ytmedia.cache.SqlDelightSegmentIndex
 import io.ymusic.ytmedia.cache.nativeSegmentDatabaseDriver
 import io.ymusic.ytmedia.proxy.LocalMediaProxy
 import kmpcommon.log.TeeLogger
+import kmpcommon.uri.filePath
+import kmpcommon.uri.fileUri
 import kmphttp.KmpHttpClient
 import kmphttp.RedirectOptions
 import kmphttp.create
@@ -68,12 +81,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okio.FileSystem
 import okio.Path.Companion.toPath
 import platform.Foundation.NSApplicationSupportDirectory
 import platform.Foundation.NSBundle
 import platform.Foundation.NSCachesDirectory
 import platform.Foundation.NSDate
+import platform.Foundation.NSDocumentDirectory
 import platform.Foundation.NSSearchPathForDirectoriesInDomains
 import platform.Foundation.NSUserDomainMask
 import platform.Foundation.timeIntervalSince1970
@@ -295,12 +310,54 @@ private suspend fun buildIosGraph(container: UIView): AppGraph {
         ),
     )
 
+    val mediaStore = BetterMediaStore.create(mediaStoreNativeDriver())
+    val downloadsPath = (NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, true).first() as String)
+        .toPath()
+        .resolve("YMusic")
+    FileSystem.SYSTEM.createDirectories(downloadsPath)
+    val downloadsUri = fileUri(downloadsPath.toString())
+    mediaStore.upsertBucket(BucketDraft(downloadsUri, "YMusic"))
+    settings.put(AppSettings.downloadLocation, downloadsUri.toString())
+    val resolver = YtEngineSabrSpecResolver {
+        withContext(Dispatchers.Main) { player.prepareYoutubeEngine() }
+        msePlayer
+    }
+    val downloadService = DownloadService(
+        store = DownloadStore(downloadDatabaseNativeDriver(), rootLogger),
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
+        now = now,
+        resolver = resolver,
+        client = KmpHttpClient.create {
+            cookieJar = cookies
+            defaultRedirectOptions = RedirectOptions(followRedirects = false, followSslRedirects = false)
+        },
+        userAgent = MSE_CHROME_UA,
+        ffmpeg = null,
+        nativeMp4Muxer = NativeMp4Muxer { videoPath, audioPath, outputPath, title, artist, videoId ->
+            withContext(Dispatchers.Default) {
+                MseHostNative.muxMp4(videoPath, audioPath, outputPath, title, artist, videoId)
+            }
+        },
+        storage = DefaultDownloadStorage(FileSystem.SYSTEM, dataDir.resolve("download-work")),
+        maxConcurrent = 1,
+        mediaCache = playerCache,
+        segmentIndex = SqlDelightSegmentIndex(
+            nativeSegmentDatabaseDriver("download-segments.db"),
+            now = now,
+        ),
+        logger = rootLogger,
+        downloadFolder = { downloadsUri.toString() },
+        onCompleted = { task, result -> registerCompletedDownload(mediaStore, settings, null, task, result) },
+        playerResponse = resolver::playerResponse,
+    )
+
     val graph = AppGraph(
         engines = engines,
         player = player,
         logger = rootLogger,
         playerCache = playerCache,
-        mediaStore = null,
+        mediaStore = mediaStore,
+        downloads = downloadService,
         playHistory = PlayHistoryStore(playHistoryNativeDriver()),
         sponsorBlockStore = SqliteSponsorBlockStore(sponsorBlockNativeDriver()),
         scanLibraryFolder = null,
@@ -322,6 +379,8 @@ private suspend fun buildIosGraph(container: UIView): AppGraph {
         scanQrCode = { iosScanQrCode() },
         confirmDeviceOwner = { title, subtitle -> iosConfirmDeviceOwner(title, subtitle) },
         shareText = ::iosShareText,
+        shareFile = ::iosShareFile,
+        deleteFromDisk = { item -> FileSystem.SYSTEM.delete(item.uri.filePath().toPath()) },
     ) { modifier -> IosMseVideo(mseHole, msePlayer, modifier) }
     IosPipHost.hole = mseHole
     IosPipHost.pip = graph.pip

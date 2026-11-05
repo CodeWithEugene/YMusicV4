@@ -1,6 +1,6 @@
 # `:iosApp`
 
-The iOS product shell runs the shared Compose `App` from `:commonUi` over the AVFoundation local and MSE YouTube engines.
+The iOS product shell runs the shared Compose `App` from `:commonUi` over the AVFoundation local and MSE YouTube engines. Offline M4A audio and MP4 video downloads persist in the app's Documents directory, appear in Library, resume after reopening the app, and can be exported with the system share sheet or the Files app.
 
 `iosApp/iOSApp.swift` hosts `MainViewControllerKt.MainViewController()` from the `YMusicApp` framework. The framework builds the iOS `AppGraph` and runs `App(graph)`.
 
@@ -33,6 +33,12 @@ The Xcode build phase runs `:iosAppKotlin:embedAndSignAppleFrameworkForXcode` wi
 ## Simulator
 
 Compose Multiplatform 1.11.1 does not provide an `iosX64` target. The simulator therefore requires an Apple silicon Mac and uses `iosSimulatorArm64`.
+
+## Downloads
+
+The iOS app offers M4A audio and MP4 video. M4A publishes YouTube's AAC track directly. MP4 uses the native libav host to stream-copy the downloaded video and AAC tracks into one file. MP3, Opus, WebM, embedded captions, and metadata probing are not available on iOS.
+
+A download continues only while iOS allows the app to execute. When the app is suspended or terminated, reopen it and resume the paused task. Completed files are under Files, On My iPhone, YMusic, and can also be exported from the download card's Share action.
 
 ## Notes
 

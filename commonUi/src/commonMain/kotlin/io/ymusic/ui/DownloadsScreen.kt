@@ -434,7 +434,11 @@ private fun completedFileActions(graph: AppGraph, task: DownloadTask, service: D
     val fileUri = task.fileUri
     return CompletedFileActions(
         addToPlaylist = if (item != null && songActions != null) ({ songActions.addToPlaylist(item) }) else null,
-        share = LocalShareYoutube.current?.let { share -> { share(YtFeedItem.KIND_VIDEO, task.videoId) } },
+        share = when {
+            fileUri != null && graph.shareFile != null && task.state == DownloadState.COMPLETED ->
+                ({ graph.shareFile.invoke(fileUri) })
+            else -> LocalShareYoutube.current?.let { share -> { share(YtFeedItem.KIND_VIDEO, task.videoId) } }
+        },
         rename = if (graph.fileRenaming != null && fileUri != null && task.state == DownloadState.COMPLETED) onRename else null,
         deleteFile = if (item != null && songActions?.canDelete == true) {
             { songActions.requestDelete(item) { service.remove(task.id) } }
