@@ -228,7 +228,24 @@ class YtStreamDownloader(
         val progress = SabrProgress { aDone, aLen, vDone, vLen -> onProgress(aDone + vDone, aLen + vLen) }
         var current = spec
         var retries = 0
-        var firstInvalid: SabrPoTokenInvalid? = null
+        var firstAttestationFailure: Throwable? = null
+
+        suspend fun refreshAttestation(error: Throwable): SabrStreamSpec {
+            firstAttestationFailure?.let(error::addSuppressed) ?: run { firstAttestationFailure = error }
+            if (retries >= MAX_ATTESTATION_RETRIES) throw sabrFailure(error)
+            retries++
+            log?.log(
+                Logger.Level.WARN,
+                "SABR attestation rejected or pending, refreshing ($retries/$MAX_ATTESTATION_RETRIES): ${error.message}",
+            )
+            return try {
+                reAttest()
+            } catch (refreshError: Throwable) {
+                refreshError.addSuppressed(error)
+                throw refreshError
+            }
+        }
+
         while (true) {
             try {
                 SabrSession(logger = log).download(
@@ -244,16 +261,9 @@ class YtStreamDownloader(
                 )
                 return
             } catch (e: SabrPoTokenInvalid) {
-                firstInvalid?.let(e::addSuppressed) ?: run { firstInvalid = e }
-                if (retries >= MAX_PO_TOKEN_RETRIES) throw sabrFailure(e)
-                retries++
-                log?.log(Logger.Level.WARN, "PO token invalid, re-attesting ($retries/$MAX_PO_TOKEN_RETRIES): ${e.message}")
-                current = try {
-                    reAttest()
-                } catch (error: Throwable) {
-                    error.addSuppressed(e)
-                    throw error
-                }
+                current = refreshAttestation(e)
+            } catch (e: SabrAttestationPending) {
+                current = refreshAttestation(e)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
@@ -263,7 +273,7 @@ class YtStreamDownloader(
     }
 }
 
-private const val MAX_PO_TOKEN_RETRIES = 3
+private const val MAX_ATTESTATION_RETRIES = 3
 
 /** An uncoded SABR session failure as its site code; coded, network and disk-full failures pass through. */
 private fun sabrFailure(error: Throwable): Throwable = when {
