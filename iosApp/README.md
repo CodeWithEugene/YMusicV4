@@ -42,6 +42,6 @@ A download continues only while iOS allows the app to execute. When the app is s
 
 ## Notes
 
-* The iOS graph currently has no media store, so Library is empty.
+* Completed downloads are registered in the iOS media store and appear in Library.
 * Local video does not yet use the shared iOS surface. AVFoundation local playback renders through its own player layer.
 * Settings to Link devices uses the camera to scan a desktop QR code, then requires a PIN or Face ID before sending encrypted YouTube cookies.
