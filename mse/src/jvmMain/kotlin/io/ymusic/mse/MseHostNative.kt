@@ -91,6 +91,10 @@ actual object MseHostNative {
     @JvmStatic
     actual external fun pcmLevels(handle: Long, out: FloatArray): Int
 
+    actual fun muxMp4(videoPath: String, audioPath: String, outputPath: String, title: String, artist: String?, videoId: String) {
+        error("native iOS MP4 mux is unavailable on the JVM")
+    }
+
     private fun loadLibrary() {
         if (!loaded.compareAndSet(false, true)) return
         try {

@@ -162,6 +162,7 @@ E80073 D MediaSource not open / player released (mse)
 E80074 D MSE decoder playback error (mse android MediaCodec)
 E80075 D ffmpeg JNI backend missing or failed to create (mse jvm)
 E80076 D MSE append parse / byte-stream violation (mse)
+E80077 - iOS native MP4 mux failed (mse)
 
 E90210 - (example) kmpCommon CodedErrorTest / HOST_PROTOCOLS.md fixture
 

@@ -33,4 +33,6 @@ expect object MseHostNative {
 
     /** Fixed-position log-frequency bars in 0..1. Returns count written. */
     fun pcmLevels(handle: Long, out: FloatArray): Int
+
+    fun muxMp4(videoPath: String, audioPath: String, outputPath: String, title: String, artist: String?, videoId: String)
 }

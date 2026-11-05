@@ -20,6 +20,8 @@ import io.ymusic.mse.cinterop.mse_host_video_decoder
 import io.ymusic.mse.cinterop.mse_host_video_size
 import io.ymusic.mse.cinterop.mse_host_vtable
 import io.ymusic.mse.cinterop.mse_ios_log
+import io.ymusic.mse.cinterop.mse_ios_mux_error
+import io.ymusic.mse.cinterop.mse_ios_mux_mp4
 import io.ymusic.mse.cinterop.mse_set_log_callback
 import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.COpaque
@@ -38,6 +40,7 @@ import kotlinx.cinterop.toCPointer
 import kotlinx.cinterop.toKString
 import kotlinx.cinterop.usePinned
 import kotlinx.cinterop.value
+import projectcommon.error.TechnicalException
 
 @OptIn(ExperimentalForeignApi::class)
 actual object MseHostNative {
@@ -155,6 +158,13 @@ actual object MseHostNative {
         if (handle == 0L || out.isEmpty()) return 0
         return out.usePinned { pinned ->
             mse_host_pcm_levels(handle.toCPointer<COpaque>(), pinned.addressOf(0), out.size)
+        }
+    }
+
+    actual fun muxMp4(videoPath: String, audioPath: String, outputPath: String, title: String, artist: String?, videoId: String) {
+        val result = mse_ios_mux_mp4(videoPath, audioPath, outputPath, title, artist, videoId)
+        if (result != 0) {
+            throw TechnicalException("E80077", mse_ios_mux_error()?.toKString() ?: "iOS MP4 mux failed")
         }
     }
 

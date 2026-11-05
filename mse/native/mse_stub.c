@@ -150,3 +150,20 @@ int mse_host_pcm_levels(void *h, float *out, int n)
     (void)n;
     return 0;
 }
+
+int mse_ios_mux_mp4(const char *video_path, const char *audio_path, const char *output_path,
+                    const char *title, const char *artist, const char *video_id)
+{
+    (void)video_path;
+    (void)audio_path;
+    (void)output_path;
+    (void)title;
+    (void)artist;
+    (void)video_id;
+    return -1;
+}
+
+const char *mse_ios_mux_error(void)
+{
+    return "iOS MP4 mux unavailable";
+}
