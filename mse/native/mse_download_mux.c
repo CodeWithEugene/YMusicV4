@@ -1,5 +1,6 @@
 #include "mse_native.h"
 
+#include <libavcodec/codec_id.h>
 #include <libavcodec/codec_par.h>
 #include <libavcodec/packet.h>
 #include <libavformat/avformat.h>
@@ -80,6 +81,52 @@ static int write_packet(AVFormatContext *output, AVPacket *packet, AVStream *sou
     return 0;
 }
 
+static int write_single_stream(AVFormatContext *input, AVStream *source, AVFormatContext *output,
+                               AVStream *target)
+{
+    AVPacket *packet = av_packet_alloc();
+    int have_packet;
+    int rc = -1;
+    if (!packet)
+        return mux_fail("allocate packet", AVERROR(ENOMEM));
+    while ((have_packet = read_stream_packet(input, source, packet)) > 0) {
+        if (write_packet(output, packet, source, target) < 0)
+            goto done;
+    }
+    if (have_packet < 0)
+        goto done;
+    rc = 0;
+
+done:
+    av_packet_free(&packet);
+    return rc;
+}
+
+static void set_metadata(AVFormatContext *output, const char *title, const char *artist,
+                         const char *video_id)
+{
+    if (title && title[0])
+        av_dict_set(&output->metadata, "title", title, 0);
+    if (artist && artist[0])
+        av_dict_set(&output->metadata, "artist", artist, 0);
+    if (video_id && video_id[0])
+        av_dict_set(&output->metadata, "composer", video_id, 0);
+}
+
+static int open_output(AVFormatContext *output, const char *output_path)
+{
+    int rc;
+    if (!(output->oformat->flags & AVFMT_NOFILE)) {
+        rc = avio_open2(&output->pb, output_path, AVIO_FLAG_WRITE, NULL, NULL);
+        if (rc < 0)
+            return mux_fail("open media output", rc);
+    }
+    rc = avformat_write_header(output, NULL);
+    if (rc < 0)
+        return mux_fail("write media header", rc);
+    return 0;
+}
+
 static int write_interleaved(AVFormatContext *video, AVStream *video_in, AVStream *video_out,
                              AVFormatContext *audio, AVStream *audio_in, AVStream *audio_out,
                              AVFormatContext *output)
@@ -121,6 +168,103 @@ done:
     return rc;
 }
 
+int mse_ios_mux_m4a(const char *audio_path, const char *cover_path, const char *output_path,
+                    const char *title, const char *artist, const char *video_id)
+{
+    AVFormatContext *audio = NULL;
+    AVFormatContext *cover = NULL;
+    AVFormatContext *output = NULL;
+    AVStream *audio_in;
+    AVStream *audio_out = NULL;
+    AVStream *cover_in = NULL;
+    AVStream *cover_out = NULL;
+    AVPacket *cover_packet = NULL;
+    int rc = -1;
+
+    g_mux_error[0] = 0;
+    if (!audio_path || !output_path) {
+        snprintf(g_mux_error, sizeof(g_mux_error), "missing mux path");
+        return -1;
+    }
+    if (open_input(audio_path, &audio) < 0)
+        goto done;
+    audio_in = first_stream(audio, AVMEDIA_TYPE_AUDIO);
+    if (!audio_in) {
+        snprintf(g_mux_error, sizeof(g_mux_error), "missing audio stream");
+        goto done;
+    }
+    if (cover_path && cover_path[0]) {
+        if (open_input(cover_path, &cover) < 0)
+            goto done;
+        cover_in = first_stream(cover, AVMEDIA_TYPE_VIDEO);
+        if (!cover_in || cover_in->codecpar->codec_id != AV_CODEC_ID_MJPEG) {
+            snprintf(g_mux_error, sizeof(g_mux_error), "cover is not JPEG");
+            goto done;
+        }
+    }
+    rc = avformat_alloc_output_context2(&output, NULL, "ipod", output_path);
+    if (rc < 0 || !output) {
+        mux_fail("create M4A output", rc < 0 ? rc : AVERROR_UNKNOWN);
+        rc = -1;
+        goto done;
+    }
+    if (copy_stream(output, audio_in, &audio_out) < 0)
+        goto done;
+    if (cover_in) {
+        if (copy_stream(output, cover_in, &cover_out) < 0)
+            goto done;
+        cover_out->disposition |= AV_DISPOSITION_ATTACHED_PIC;
+        av_dict_set(&cover_out->metadata, "title", "Album cover", 0);
+        av_dict_set(&cover_out->metadata, "comment", "Cover (Front)", 0);
+        cover_packet = av_packet_alloc();
+        if (!cover_packet) {
+            mux_fail("allocate cover packet", AVERROR(ENOMEM));
+            goto done;
+        }
+        if (read_stream_packet(cover, cover_in, cover_packet) <= 0) {
+            snprintf(g_mux_error, sizeof(g_mux_error), "read cover packet failed");
+            goto done;
+        }
+        av_packet_rescale_ts(cover_packet, cover_in->time_base, cover_out->time_base);
+        cover_packet->stream_index = cover_out->index;
+        cover_packet->flags |= AV_PKT_FLAG_KEY;
+        cover_packet->pos = -1;
+    }
+    set_metadata(output, title, artist, video_id);
+    if (open_output(output, output_path) < 0)
+        goto done;
+    if (cover_packet) {
+        rc = av_interleaved_write_frame(output, cover_packet);
+        av_packet_unref(cover_packet);
+        if (rc < 0) {
+            mux_fail("write cover packet", rc);
+            goto done;
+        }
+    }
+    if (write_single_stream(audio, audio_in, output, audio_out) < 0)
+        goto done;
+    rc = av_write_trailer(output);
+    if (rc < 0) {
+        mux_fail("write M4A trailer", rc);
+        rc = -1;
+        goto done;
+    }
+    rc = 0;
+
+done:
+    av_packet_free(&cover_packet);
+    avformat_close_input(&audio);
+    avformat_close_input(&cover);
+    if (output) {
+        if (output->pb)
+            avio_closep(&output->pb);
+        avformat_free_context(output);
+    }
+    if (rc != 0)
+        remove(output_path);
+    return rc;
+}
+
 int mse_ios_mux_mp4(const char *video_path, const char *audio_path, const char *output_path,
                     const char *title, const char *artist, const char *video_id)
 {
@@ -156,26 +300,9 @@ int mse_ios_mux_mp4(const char *video_path, const char *audio_path, const char *
         rc = -1;
         goto done;
     }
-    if (title && title[0])
-        av_dict_set(&output->metadata, "title", title, 0);
-    if (artist && artist[0])
-        av_dict_set(&output->metadata, "artist", artist, 0);
-    if (video_id && video_id[0])
-        av_dict_set(&output->metadata, "composer", video_id, 0);
-    if (!(output->oformat->flags & AVFMT_NOFILE)) {
-        rc = avio_open2(&output->pb, output_path, AVIO_FLAG_WRITE, NULL, NULL);
-        if (rc < 0) {
-            mux_fail("open MP4 output", rc);
-            rc = -1;
-            goto done;
-        }
-    }
-    rc = avformat_write_header(output, NULL);
-    if (rc < 0) {
-        mux_fail("write MP4 header", rc);
-        rc = -1;
+    set_metadata(output, title, artist, video_id);
+    if (open_output(output, output_path) < 0)
         goto done;
-    }
     if (write_interleaved(video, video_in, video_out, audio, audio_in, audio_out, output) < 0) {
         rc = -1;
         goto done;

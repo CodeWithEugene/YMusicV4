@@ -21,6 +21,7 @@ import io.ymusic.mse.cinterop.mse_host_video_size
 import io.ymusic.mse.cinterop.mse_host_vtable
 import io.ymusic.mse.cinterop.mse_ios_log
 import io.ymusic.mse.cinterop.mse_ios_mux_error
+import io.ymusic.mse.cinterop.mse_ios_mux_m4a
 import io.ymusic.mse.cinterop.mse_ios_mux_mp4
 import io.ymusic.mse.cinterop.mse_set_log_callback
 import kotlinx.cinterop.ByteVar
@@ -158,6 +159,13 @@ actual object MseHostNative {
         if (handle == 0L || out.isEmpty()) return 0
         return out.usePinned { pinned ->
             mse_host_pcm_levels(handle.toCPointer<COpaque>(), pinned.addressOf(0), out.size)
+        }
+    }
+
+    actual fun muxM4a(audioPath: String, coverPath: String?, outputPath: String, title: String, artist: String?, videoId: String) {
+        val result = mse_ios_mux_m4a(audioPath, coverPath, outputPath, title, artist, videoId)
+        if (result != 0) {
+            throw TechnicalException("E80077", mse_ios_mux_error()?.toKString() ?: "iOS M4A mux failed")
         }
     }
 

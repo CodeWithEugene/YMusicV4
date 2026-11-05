@@ -151,6 +151,18 @@ int mse_host_pcm_levels(void *h, float *out, int n)
     return 0;
 }
 
+int mse_ios_mux_m4a(const char *audio_path, const char *cover_path, const char *output_path,
+                    const char *title, const char *artist, const char *video_id)
+{
+    (void)audio_path;
+    (void)cover_path;
+    (void)output_path;
+    (void)title;
+    (void)artist;
+    (void)video_id;
+    return -1;
+}
+
 int mse_ios_mux_mp4(const char *video_path, const char *audio_path, const char *output_path,
                     const char *title, const char *artist, const char *video_id)
 {
