@@ -29,7 +29,8 @@ git -C ../ffmpeg-build checkout "$(sed -n 's/^ *FFMPEG_BUILD_REF: //p' .github/w
 cd ../ffmpeg-build
 scripts/build-desktop.sh            # desktop: macOS, Linux, or Windows from an MSYS2 shell
 scripts/build-android.sh arm64-v8a  # Android, once per ABI: armeabi-v7a, arm64-v8a, x86, x86_64
-scripts/build-ios.sh                # iOS
+scripts/build-ios.sh iphoneos       # iOS device
+scripts/build-ios.sh iphonesimulator # iOS simulator
 ```
 
 ### Per platform

@@ -45,7 +45,11 @@ fun ffmpegIosPrefix(targetName: String): File? {
         else -> null
     } ?: return null
     val dir = rootProject.projectDir.parentFile.resolve("ffmpeg-build/out/$slug")
-    return dir.takeIf { File(it, "lib/libavcodec.a").isFile }
+    if (!File(dir, "lib/libavcodec.a").isFile) {
+        val sdk = if (targetName == "iosArm64") "iphoneos" else "iphonesimulator"
+        throw GradleException("ffmpeg-build/out/$slug is missing. Run ../ffmpeg-build/scripts/build-ios.sh $sdk")
+    }
+    return dir
 }
 
 fun registerMseNativeLib(targetName: String): TaskProvider<Exec> {
