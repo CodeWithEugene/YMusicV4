@@ -9,6 +9,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import io.ymusic.download.AudioQuality
 import io.ymusic.download.CaptionChoice
+import io.ymusic.download.DownloadCapabilities
 import io.ymusic.download.DownloadFileNames
 import io.ymusic.download.DownloadFormat
 import io.ymusic.download.DownloadKind
@@ -72,18 +73,20 @@ data class QuickDownloadPreset(
          * Opus (YouTube's best audio, in Ogg) when ffmpeg can write the WebM, else M4A; the default
          * audio track; captions in the device language — until the user saves a preset.
          */
-        fun default(ffmpegAvailable: Boolean): QuickDownloadPreset = QuickDownloadPreset(
-            format = if (ffmpegAvailable) DownloadFormat.AUDIO_WEBM else DownloadFormat.M4A,
+        fun default(capabilities: DownloadCapabilities?): QuickDownloadPreset = QuickDownloadPreset(
+            format = capabilities?.audioFormats?.firstOrNull() ?: DownloadFormat.M4A,
             height = null,
             audioLanguage = null,
-            captionLanguage = systemLanguageTag(),
+            captionLanguage = systemLanguageTag().takeIf { capabilities?.captions == true },
         )
 
         /** [default] when never saved, or when the saved format is unknown to this build (an older app version). */
-        fun decode(raw: String, ffmpegAvailable: Boolean): QuickDownloadPreset {
-            if (raw.isBlank()) return default(ffmpegAvailable)
+        fun decode(raw: String, capabilities: DownloadCapabilities?): QuickDownloadPreset {
+            if (raw.isBlank()) return default(capabilities)
             val json = Json.parseToJsonElement(raw).jsonObject
-            val format = DownloadFormat.entries.firstOrNull { it.name == json.string(KEY_FORMAT) } ?: return default(ffmpegAvailable)
+            val available = capabilities?.let { it.audioFormats + it.videoFormats }.orEmpty()
+            val format = DownloadFormat.entries.firstOrNull { it.name == json.string(KEY_FORMAT) && it in available }
+                ?: return default(capabilities)
             return QuickDownloadPreset(
                 format = format,
                 height = json.intOrNull(KEY_HEIGHT),

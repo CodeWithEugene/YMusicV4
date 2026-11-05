@@ -79,10 +79,8 @@ internal class DownloadOptionsState(
 
     /** The video containers this video can be downloaded in. */
     val containers: List<DownloadFormat>
-        get() = if (options?.video?.any { it.webmBytes != null } == true) {
-            listOf(DownloadFormat.VIDEO_MP4, DownloadFormat.VIDEO_WEBM)
-        } else {
-            listOf(DownloadFormat.VIDEO_MP4)
+        get() = downloads.capabilities.videoFormats.filter { format ->
+            format != DownloadFormat.VIDEO_WEBM || options?.video?.any { it.webmBytes != null } == true
         }
 
     val format: DownloadFormat
@@ -94,8 +92,7 @@ internal class DownloadOptionsState(
 
     val extension: String get() = "." + format.fileExtension
 
-    /** Captions go into the file — subtitle tracks, or lyrics for MP3 and Opus — which takes ffmpeg (absent on iOS). */
-    val captionsSupported: Boolean get() = downloads.ffmpegAvailable
+    val captionsSupported: Boolean get() = downloads.capabilities.captions
 
     val audioOption: AudioOption? get() = options?.audio?.firstOrNull { it.format == audioFormat }
 

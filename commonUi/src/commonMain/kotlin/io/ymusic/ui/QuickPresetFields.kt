@@ -15,7 +15,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.ymusic.download.AudioQuality
-import io.ymusic.download.DownloadFormat
+import io.ymusic.download.DownloadCapabilities
 import io.ymusic.download.DownloadKind
 import io.ymusic.dynamicengine.yt.YtLocaleOption
 import io.ymusic.dynamicengine.yt.ytLocaleOptions
@@ -39,11 +39,11 @@ private val PRESET_HEIGHTS = listOf(2160, 1440, 1080, 720, 480, 360)
 internal fun QuickPresetFields(
     preset: QuickDownloadPreset,
     languages: List<YtLocaleOption>,
-    ffmpegAvailable: Boolean,
+    capabilities: DownloadCapabilities,
     onChange: (QuickDownloadPreset) -> Unit,
 ) {
-    val audioFormats = if (ffmpegAvailable) listOf(DownloadFormat.AUDIO_WEBM, DownloadFormat.M4A, DownloadFormat.MP3) else listOf(DownloadFormat.M4A)
-    val videoFormats = if (ffmpegAvailable) listOf(DownloadFormat.VIDEO_MP4, DownloadFormat.VIDEO_WEBM) else emptyList()
+    val audioFormats = capabilities.audioFormats
+    val videoFormats = capabilities.videoFormats
     OptionLine(stringResource(Res.string.download_format), presetLabel(preset)) { close ->
         MenuGroupLabel(stringResource(Res.string.download_audio_only))
         ChoiceMenuItems(
@@ -80,7 +80,7 @@ internal fun QuickPresetFields(
             close,
         )
     }
-    if (ffmpegAvailable) {
+    if (capabilities.captions) {
         val off = stringResource(Res.string.download_captions_off)
         OptionLine(stringResource(Res.string.download_captions), languageName(preset.captionLanguage, languages) ?: off) { close ->
             ChoiceMenuItems(

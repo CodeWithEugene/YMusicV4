@@ -41,11 +41,16 @@ class ResolvedVideo(val spec: SabrStreamSpec, val artist: String? = null)
  * The final scratch is marked ready before step 4, so a run that fails only to publish is retried from
  * step 4 alone (the scratch folder outlives the failure; only cancel or a successful publish deletes it).
  */
+fun interface NativeMp4Muxer {
+    suspend fun mux(videoPath: String, audioPath: String, outputPath: String, title: String, artist: String?, videoId: String)
+}
+
 class DownloadPipeline(
     resolver: SabrSpecResolver,
     client: KmpHttpClient,
     userAgent: String,
     private val ffmpeg: Ffmpeg?,
+    private val nativeMp4Muxer: NativeMp4Muxer?,
     private val storage: DownloadStorage,
     mediaCache: MediaCache?,
     segmentIndex: SegmentIndex?,
@@ -97,6 +102,13 @@ class DownloadPipeline(
         // (metadata lives in the DB task row). Captions can't be muxed without ffmpeg here, so drop them.
         if (task.format == DownloadFormat.M4A && ffmpeg == null) {
             return publish(task, markReady(task.id, AUDIO_SCRATCH, audioFmt, null), destinationFolder)
+        }
+
+        if (task.format == DownloadFormat.VIDEO_MP4 && ffmpeg == null && nativeMp4Muxer != null) {
+            val out = storage.scratch(task.id, OUT_SCRATCH)
+            out.delete()
+            nativeMp4Muxer.mux(streams.video!!.scratch.path, streams.audio.scratch.path, out.path, task.title, task.artist ?: streams.artist, task.videoId)
+            return publish(task, markReady(task.id, OUT_SCRATCH, audioFmt, videoFmt), destinationFolder)
         }
 
         // 2. mux/convert + metadata into the final scratch, reporting ffmpeg's output-time progress. The

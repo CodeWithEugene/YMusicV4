@@ -54,6 +54,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import io.ymusic.download.DownloadCapabilities
 import io.ymusic.dynamicengine.yt.YtFeedItem
 import io.ymusic.dynamicengine.yt.YtLocaleOption
 import io.ymusic.mediastore.BetterMediaStore
@@ -164,7 +165,7 @@ fun PlaylistDownloadScreen(graph: AppGraph, session: PlaylistDownloadSession, on
                 OptionsCard(
                     session,
                     languages,
-                    ffmpegAvailable = downloads.ffmpegAvailable,
+                    capabilities = downloads.capabilities,
                     locationName = locationName,
                     onPickLocation = { scope.launch { pickDownloadFolder(graph, snackbar, scans) } },
                     libraryStore = graph.mediaStore,
@@ -267,7 +268,7 @@ private fun LoadedHeader(session: PlaylistDownloadSession, ready: Pager.State.Re
 private fun OptionsCard(
     session: PlaylistDownloadSession,
     languages: List<YtLocaleOption>,
-    ffmpegAvailable: Boolean,
+    capabilities: DownloadCapabilities,
     locationName: String?,
     onPickLocation: () -> Unit,
     libraryStore: BetterMediaStore?,
@@ -286,7 +287,7 @@ private fun OptionsCard(
             stringResource(Res.string.playlist_options).uppercase(),
             style = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.5.sp, color = DesignColors.InkSecondary),
         )
-        QuickPresetFields(session.preset, languages, ffmpegAvailable) { session.preset = it }
+        QuickPresetFields(session.preset, languages, capabilities) { session.preset = it }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(DesignSpacing.Space16)) {
             Text(
                 stringResource(Res.string.download_save_to),

@@ -91,8 +91,8 @@ internal object FormatSelection {
 
     /**
      * Video track nearest [requestedHeight] (or the highest when null), biased to the codec family that
-     * stream-copies into [container]: VP9/WebM for a WebM output, AVC/mp4 for an MP4 output (VP9-in-mp4
-     * copies but plays back poorly on many devices). Ties break on larger [AdaptiveFormat.clen]. A WebM
+     * stream-copies into [container]: VP9/WebM for a WebM output, and an MP4 codec for an MP4 output.
+     * Ties break on larger [AdaptiveFormat.clen]. A WebM
      * output only considers codecs the WebM muxer accepts, even at a farther height.
      */
     fun videoNearest(
@@ -102,12 +102,11 @@ internal object FormatSelection {
     ): AdaptiveFormat? {
         val video = videoStreams(formats, container)
         if (video.isEmpty()) return null
-        val preferMp4Codec = container == DownloadFormat.VIDEO_MP4
         return video.sortedWith(
             // 1) closeness to the requested height (0 distance when unspecified → pure quality sort)
             compareBy<AdaptiveFormat> { requestedHeight?.let { req -> kotlin.math.abs((it.height ?: 0) - req) } ?: 0 }
                 // 2) codec that copies cleanly into the target container
-                .thenByDescending { if (preferMp4Codec) it.mimeType.contains("mp4") else it.mimeType.contains("webm") }
+                .thenByDescending { it.mimeType.contains(if (container == DownloadFormat.VIDEO_MP4) "mp4" else "webm") }
                 // 3) higher resolution, then bigger stream (bitrate proxy)
                 .thenByDescending { it.height ?: 0 }
                 .thenByDescending { it.clen },
@@ -116,7 +115,11 @@ internal object FormatSelection {
 
     private fun videoStreams(formats: List<AdaptiveFormat>, container: DownloadFormat): List<AdaptiveFormat> {
         val playable = formats.filter { it.isVideo && it.clen > 0 && it.height != null }
-        return if (container == DownloadFormat.VIDEO_WEBM) playable.filter { isWebmVideo(it.mimeType) } else playable
+        return when (container) {
+            DownloadFormat.VIDEO_WEBM -> playable.filter { isWebmVideo(it.mimeType) }
+            DownloadFormat.VIDEO_MP4 -> playable.filter { it.mimeType.contains("mp4") }
+            else -> playable
+        }
     }
 }
 

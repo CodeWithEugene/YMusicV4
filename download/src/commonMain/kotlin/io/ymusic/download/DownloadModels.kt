@@ -14,10 +14,8 @@ import projectcommon.error.CodedError
  * Only MP3 re-encodes: every source is lossy, so any other output just muxes the original streams.
  *
  * Every output goes through ffmpeg where it exists — not just to transcode/mux, but to embed the
- * metadata tags (title / artist / composer=videoId) into the container. iOS has no ffmpeg: there M4A
- * degrades to the raw best-AAC stream written straight to the file, its metadata living in the download
- * DB row instead (video would need an AVFoundation muxer — separate). So on iOS only M4A is offered;
- * MP3/video are hidden — the picker gates on [DownloadService.ffmpegAvailable].
+ * metadata tags (title / artist / composer=videoId) into the container. iOS publishes the raw AAC M4A
+ * stream and uses its native libav host to mux MP4 video. MP3, Opus and WebM remain unavailable there.
  */
 enum class DownloadFormat(val kind: DownloadKind, val fileExtension: String) {
     MP3(DownloadKind.AUDIO, "mp3"),

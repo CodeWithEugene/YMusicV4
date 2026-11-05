@@ -144,6 +144,8 @@ class AppGraph(
     val revealInFolderLabel: org.jetbrains.compose.resources.StringResource? = null,
     /** Opens the system share sheet with a text (a link). Null = the UI copies it to the clipboard instead. */
     val shareText: ((text: String) -> Unit)? = null,
+    /** Opens the system share or export sheet for a downloaded file. Null shares only its YouTube link. */
+    val shareFile: ((uri: String) -> Unit)? = null,
     /** Renames downloaded files in place (Downloads' "Rename"); null hides the action. */
     val fileRenaming: FileRenaming? = null,
     /** Display version for the drawer header (e.g. "4.0.1 · arm64"); null hides the line. */
@@ -260,7 +262,7 @@ class AppGraph(
 
     /** The Quick download preset, [QuickDownloadPreset.default] until one is saved. Change it with [saveQuickDownload]. */
     val quickDownload: StateFlow<QuickDownloadPreset> =
-        settings.flow(AppSettings.quickDownloadPreset).mapState { QuickDownloadPreset.decode(it, downloads?.ffmpegAvailable == true) }
+        settings.flow(AppSettings.quickDownloadPreset).mapState { QuickDownloadPreset.decode(it, downloads?.capabilities) }
 
     suspend fun saveQuickDownload(preset: QuickDownloadPreset) = settings.put(AppSettings.quickDownloadPreset, preset.encode())
     /**

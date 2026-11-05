@@ -50,6 +50,21 @@ class AudioOption(val format: DownloadFormat, val qualities: List<AudioQualityOp
         qualities.firstOrNull { it.quality >= quality } ?: qualities.last()
 }
 
+class DownloadCapabilities(
+    val audioFormats: List<DownloadFormat>,
+    val videoFormats: List<DownloadFormat>,
+    val captions: Boolean,
+) {
+    companion object {
+        val NO_MUX = DownloadCapabilities(listOf(DownloadFormat.M4A), emptyList(), false)
+        val FFMPEG = DownloadCapabilities(
+            listOf(DownloadFormat.AUDIO_WEBM, DownloadFormat.M4A, DownloadFormat.MP3),
+            listOf(DownloadFormat.VIDEO_MP4, DownloadFormat.VIDEO_WEBM),
+            true,
+        )
+    }
+}
+
 /** One audio language of a video that has dubs. */
 class AudioTrackOption(val id: String, val name: String, val isDefault: Boolean)
 
@@ -85,7 +100,10 @@ class DownloadOptions(
     companion object {
         private val json = Json { ignoreUnknownKeys = true }
 
-        fun parse(playerResponseJson: String, ffmpegAvailable: Boolean): DownloadOptions {
+        fun parse(playerResponseJson: String, ffmpegAvailable: Boolean): DownloadOptions =
+            parse(playerResponseJson, if (ffmpegAvailable) DownloadCapabilities.FFMPEG else DownloadCapabilities.NO_MUX)
+
+        fun parse(playerResponseJson: String, capabilities: DownloadCapabilities): DownloadOptions {
             val data = json.parseToJsonElement(playerResponseJson).jsonObject
             val details = data.objectOrNull("videoDetails")
             val streaming = data.objectOrNull("streamingData")
@@ -95,11 +113,11 @@ class DownloadOptions(
             val raw = streaming.objects("adaptiveFormats")
             val durationMs = formats.maxOfOrNull { it.approxDurationMs.toLong() }?.takeIf { it > 0 }
                 ?: (details?.longOrNull("lengthSeconds") ?: 0L) * 1000
-            val audio = audioOptions(formats, durationMs, ffmpegAvailable)
+            val audio = audioOptions(formats, durationMs, capabilities)
             if (audio.isEmpty()) throw TechnicalException("E70042", "download options: no audio format this platform can save")
             return DownloadOptions(
                 durationMs = durationMs,
-                video = if (ffmpegAvailable) videoOptions(formats, raw, durationMs) else emptyList(),
+                video = if (capabilities.videoFormats.isNotEmpty()) videoOptions(formats, raw, durationMs) else emptyList(),
                 audio = audio,
                 audioTracks = audioTracks(raw),
                 captions = captionEntries(data).map { CaptionOption(it.languageCode, it.name, it.isAsr, it.isDefault, it.isTranslated) },
@@ -127,10 +145,10 @@ class DownloadOptions(
         private fun audioOptions(
             formats: List<AdaptiveFormat>,
             durationMs: Long,
-            ffmpegAvailable: Boolean,
+            capabilities: DownloadCapabilities,
         ): List<AudioOption> {
             val m4a = streamOption(DownloadFormat.M4A, formats, AudioCodec.AAC)
-            if (!ffmpegAvailable) return listOfNotNull(m4a)
+            if (DownloadFormat.MP3 !in capabilities.audioFormats) return listOfNotNull(m4a)
             val mp3 = AudioQuality.entries.map { quality ->
                 val kbps = Mp3Encoding.of(quality).kbps
                 AudioQualityOption(quality, bytesAt(kbps * 1000L, durationMs), kbps)

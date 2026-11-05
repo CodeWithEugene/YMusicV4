@@ -52,6 +52,7 @@ class DownloadService(
     client: KmpHttpClient,
     userAgent: String,
     ffmpeg: Ffmpeg?,
+    nativeMp4Muxer: NativeMp4Muxer? = null,
     private val storage: DownloadStorage,
     /** How many downloads run at once — the concurrent byte-download + ffmpeg work. Player-response
      *  fetches are paced separately ([PlayerResponseGate]). */
@@ -69,7 +70,19 @@ class DownloadService(
     /** The player-response JSON for a video (no PO token) — what [probe] reads the options from. */
     private val playerResponse: (suspend (videoId: String) -> String)? = null,
 ) {
-    /** True where ffmpeg exists (Android/desktop). False on iOS — the UI hides MP3/video outputs there. */
+    val capabilities = DownloadCapabilities(
+        audioFormats = if (ffmpeg != null) {
+            listOf(DownloadFormat.AUDIO_WEBM, DownloadFormat.M4A, DownloadFormat.MP3)
+        } else {
+            listOf(DownloadFormat.M4A)
+        },
+        videoFormats = when {
+            ffmpeg != null -> listOf(DownloadFormat.VIDEO_MP4, DownloadFormat.VIDEO_WEBM)
+            nativeMp4Muxer != null -> listOf(DownloadFormat.VIDEO_MP4)
+            else -> emptyList()
+        },
+        captions = ffmpeg != null,
+    )
     val ffmpegAvailable: Boolean = ffmpeg != null
 
     private val log = logger?.fork("download")?.fork("service")
@@ -78,7 +91,7 @@ class DownloadService(
 
     private val pipeline = DownloadPipeline(
         SabrSpecResolver { videoId -> playerGate.run { resolver.resolve(videoId) } },
-        client, userAgent, ffmpeg, storage, mediaCache, segmentIndex, logger,
+        client, userAgent, ffmpeg, nativeMp4Muxer, storage, mediaCache, segmentIndex, logger,
     )
 
     private val _changes = MutableSharedFlow<DownloadChange>(
@@ -126,7 +139,7 @@ class DownloadService(
     suspend fun probe(videoId: String): DownloadOptions {
         val fetch = playerResponse ?: throw TechnicalException("E70040", "download options: no player-response source")
         val json = playerGate.run { fetch(videoId) }
-        return withContext(Dispatchers.Default) { DownloadOptions.parse(json, ffmpegAvailable) }
+        return withContext(Dispatchers.Default) { DownloadOptions.parse(json, capabilities) }
     }
 
     fun enqueue(request: DownloadRequest): String {
