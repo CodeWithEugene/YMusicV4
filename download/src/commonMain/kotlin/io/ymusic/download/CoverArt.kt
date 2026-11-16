@@ -21,7 +21,9 @@ internal class CoverArt(
 ) {
     /** The cover scratch, or null when no candidate yields a JPEG — the song then publishes without one. */
     suspend fun fetch(task: DownloadTask): DownloadScratch? {
-        val scratch = storage.scratch(task.id, "cover")
+        // The .jpg extension matters: the ffmpeg builds enable image2 (which resolves the codec
+        // from the filename) but not image_jpeg_pipe, so an extensionless JPEG fails to open.
+        val scratch = storage.scratch(task.id, "cover.jpg")
         for (url in candidates(task)) {
             scratch.delete()
             try {
