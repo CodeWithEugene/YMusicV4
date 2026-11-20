@@ -370,7 +370,6 @@ private suspend fun buildIosGraph(container: UIView): AppGraph {
             }
         },
         storage = DefaultDownloadStorage(FileSystem.SYSTEM, dataDir.resolve("download-work")),
-        maxConcurrent = 1,
         mediaCache = playerCache,
         segmentIndex = SqlDelightSegmentIndex(
             nativeSegmentDatabaseDriver("download-segments.db"),
