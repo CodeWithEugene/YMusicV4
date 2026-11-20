@@ -196,6 +196,10 @@
     <string name="menu_remove_from_playlist">Alih keluar daripada senarai main</string>
     <string name="playlist_delete_title">Padam senarai main?</string>
     <string name="playlist_delete_message">“%1$s” akan dialih keluar. Lagu-lagunya kekal dalam pustaka anda.</string>
+    <plurals name="playlist_remove_selected_title">
+        <item quantity="other">Alih keluar %1$d lagu daripada senarai main?</item>
+    </plurals>
+    <string name="playlist_remove_selected_message">Lagu-lagunya kekal dalam pustaka anda.</string>
     <string name="add_to_playlist_new">Senarai main baharu…</string>
     <string name="playlist_recent_play">Main terkini</string>
     <string name="playlist_top_tracks">Lagu teratas</string>
@@ -287,6 +291,10 @@
     <string name="cd_search">Cari</string>
     <string name="cd_back">Kembali</string>
     <string name="cd_clear">Kosongkan</string>
+    <string name="cd_voice_search">Cari dengan suara</string>
+    <string name="voice_search_press_ok">Tekan OK untuk mencari dengan suara</string>
+    <string name="voice_search_listening">Mendengar…</string>
+    <string name="voice_search_missed">Tidak dapat difahami. Tekan OK untuk mencuba lagi</string>
     <string name="cd_close">Tutup</string>
     <string name="cd_more">Lagi</string>
     <string name="cd_collapse">Kuncupkan</string>
@@ -296,10 +304,14 @@
     <string name="cd_download">Muat turun</string>
     <string name="cd_fullscreen">Skrin penuh</string>
     <string name="cd_exit_fullscreen">Keluar dari skrin penuh</string>
+    <string name="cd_show_queue">Tunjukkan baris gilir</string>
+    <string name="cd_hide_queue">Sembunyikan baris gilir</string>
     <string name="cd_fit_video">Muatkan video</string>
     <string name="cd_fill_video">Penuhi skrin</string>
-    <string name="cd_lock_rotation">Kunci putaran</string>
-    <string name="cd_unlock_rotation">Buka kunci putaran</string>
+    <string name="cd_screen_rotation">Putaran skrin</string>
+    <string name="rotation_lock_landscape">Kunci landskap</string>
+    <string name="rotation_lock_portrait">Kunci potret</string>
+    <string name="rotation_free">Putaran bebas</string>
     <string name="cd_rewind10">Undur 10 saat</string>
     <string name="cd_forward10">Maju 10 saat</string>
     <string name="cd_repeat_off">Ulang: mati</string>
@@ -408,6 +420,8 @@
     <string name="settings_audio_focus_apps">Jeda apabila apl lain memainkan bunyi</string>
     <string name="settings_sponsor_block">SponsorBlock</string>
     <string name="settings_sponsor_block_hint">Langkau segmen tajaan dalam video YouTube secara automatik. Matikan untuk sesuatu video daripada Sedang Dimainkan.</string>
+    <string name="settings_stable_volume">Kelantangan stabil</string>
+    <string name="settings_stable_volume_hint">Menyamakan bahagian kuat dan perlahan serta memainkan setiap lagu pada kelantangan yang serupa.</string>
     <string name="sponsor_block_included">SponsorBlock didayakan untuk video ini</string>
     <string name="sponsor_block_excluded">SponsorBlock dinyahdayakan untuk video ini</string>
     <string name="settings_sound">Bunyi</string>
@@ -522,6 +536,13 @@
     <string name="dialog_ok">OK</string>
     <string name="folder_picker_disabled">Apl Fail sistem dimatikan. Hidupkannya untuk memilih folder.</string>
     <string name="folder_picker_open_settings">Buka tetapan</string>
+    <string name="folder_picker_title">Pilih folder muzik</string>
+    <string name="folder_picker_use_folder">Gunakan folder ini</string>
+    <string name="folder_picker_empty">Tiada folder di sini</string>
+    <string name="folder_picker_storage_denied">Benarkan akses kepada fail muzik anda dalam tetapan untuk memilih folder.</string>
+    <string name="folder_picker_companion_message">Peranti ini tiada pemilih folder. Untuk memilih folder, muat turun dan pasang YMusic Files, aplikasi pembantu kecil untuk YMusic, daripada pautan ini, kemudian cuba lagi.</string>
+    <string name="folder_picker_companion_update">YMusic Files perlu dikemas kini untuk berfungsi dengan versi YMusic ini. Muat turun dan pasang versi terkini daripada pautan ini, kemudian cuba lagi.</string>
+    <string name="folder_picker_companion_open">Buka pautan</string>
     <string name="folder_picker_missing">Peranti ini tiada pemilih folder, jadi folder tidak boleh dipilih.</string>
     <string name="error_supervised_account">Akaun Google ini diselia, jadi YouTube tidak boleh digunakan di sini. Log keluar atau tukar kepada akaun lain.</string>
     <string name="settings_player_cache">Cache pemain</string>
@@ -634,4 +655,33 @@
     <string name="download_quality_medium">Sederhana</string>
     <string name="download_quality_best">Terbaik</string>
     <string name="download_kbps">%1$d kbps</string>
+
+    <!-- Windows refused a native library (desktop) -->
+    <string name="native_blocked">Windows telah menyekat sebahagian YMusic.</string>
+    <string name="media_engine_unavailable">Muzik dan video tidak boleh dimainkan di sini, tetapi anda masih boleh menyemak imbas dan mencari.</string>
+    <string name="native_blocked_help">Pada PC kerja atau sekolah, minta pentadbir anda membenarkan YMusic. Pada PC anda sendiri, semak Smart App Control dalam Windows Security.</string>
+    <!-- A feed reloading in place (desktop) -->
+    <string name="a11y_refreshing">Memuat semula</string>
+    <string name="a11y_loading">Memuatkan</string>
+    <!-- Download manager multi-select -->
+    <string name="select_all">Pilih semua</string>
+    <string name="downloads_action_select">Pilih</string>
+    <plurals name="downloads_selected_count">
+        <item quantity="other">%1$d dipilih</item>
+    </plurals>
+    <plurals name="downloads_remove_selected_title">
+        <item quantity="other">Alih keluar %1$d muat turun daripada senarai?</item>
+    </plurals>
+    <string name="downloads_remove_selected_message">Fail yang telah selesai kekal pada peranti ini.</string>
+    <plurals name="downloads_delete_selected_title">
+        <item quantity="other">Padam %1$d fail?</item>
+    </plurals>
+    <string name="downloads_delete_selected_message">Fail yang dipadam tidak boleh dipulihkan.</string>
+    <string name="downloads_cancel_selected">Batalkan muat turun</string>
+    <plurals name="downloads_cancel_selected_title">
+        <item quantity="other">Batalkan %1$d muat turun?</item>
+    </plurals>
+    <string name="downloads_cancel_selected_message">Bahagian yang sudah dimuat turun akan dipadam.</string>
+    <string name="downloads_cancel_selected_keep">Kekalkan</string>
+    <string name="data_dir_unusable">YMusic tidak dapat membuka folder datanya, %1$s. Pastikan ia folder yang boleh anda tulis, kemudian buka YMusic semula. (%2$s)</string>
 </resources>

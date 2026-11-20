@@ -98,6 +98,8 @@ actual object MseHostNative {
     actual fun muxMp4(videoPath: String, audioPath: String, outputPath: String, title: String, artist: String?, videoId: String) {
         error("native iOS MP4 mux is unavailable on the JVM")
     }
+    @JvmStatic
+    actual external fun setVideoHidden(handle: Long, hidden: Boolean)
 
     private fun loadLibrary() {
         if (!loaded.compareAndSet(false, true)) return
@@ -154,9 +156,9 @@ actual object MseHostNative {
             System.load(File(dir, libFileName).absolutePath)
         } catch (error: UnsatisfiedLinkError) {
             val reported = if (isWindows()) {
-                val missing = describeMissingWindowsImports(dir)
-                MseLogBridge.fire(LOG_WARN, "mse: $libFileName did not load: $missing")
-                UnsatisfiedLinkError("${error.message}: $missing").apply { initCause(error) }
+                val message = windowsLoadFailureMessage(error, depErrors, dir)
+                MseLogBridge.fire(LOG_WARN, "mse: $libFileName did not load: $message")
+                UnsatisfiedLinkError(message).apply { initCause(error) }
             } else {
                 error
             }

@@ -202,6 +202,12 @@
     <string name="menu_remove_from_playlist">Уклони са плејлисте</string>
     <string name="playlist_delete_title">Избрисати плејлисту?</string>
     <string name="playlist_delete_message">„%1$s“ ће бити уклоњена. Песме остају у вашој библиотеци.</string>
+    <plurals name="playlist_remove_selected_title">
+        <item quantity="one">Уклонити %1$d песму са плејлисте?</item>
+        <item quantity="few">Уклонити %1$d песме са плејлисте?</item>
+        <item quantity="other">Уклонити %1$d песама са плејлисте?</item>
+    </plurals>
+    <string name="playlist_remove_selected_message">Песме остају у вашој библиотеци.</string>
     <string name="add_to_playlist_new">Нова плејлиста…</string>
     <string name="playlist_recent_play">Недавно пуштано</string>
     <string name="playlist_top_tracks">Топ песме</string>
@@ -295,6 +301,10 @@
     <string name="cd_search">Претрага</string>
     <string name="cd_back">Назад</string>
     <string name="cd_clear">Обриши</string>
+    <string name="cd_voice_search">Претражујте гласом</string>
+    <string name="voice_search_press_ok">Притисните OK за претрагу гласом</string>
+    <string name="voice_search_listening">Слуша се…</string>
+    <string name="voice_search_missed">Није разумљиво. Притисните OK да бисте пробали поново</string>
     <string name="cd_close">Затвори</string>
     <string name="cd_more">Још</string>
     <string name="cd_collapse">Скупи</string>
@@ -304,10 +314,14 @@
     <string name="cd_download">Преузми</string>
     <string name="cd_fullscreen">Цео екран</string>
     <string name="cd_exit_fullscreen">Изађи из целог екрана</string>
+    <string name="cd_show_queue">Прикажи ред</string>
+    <string name="cd_hide_queue">Сакриј ред</string>
     <string name="cd_fit_video">Уклопи видео</string>
     <string name="cd_fill_video">Попуни екран</string>
-    <string name="cd_lock_rotation">Закључај ротацију</string>
-    <string name="cd_unlock_rotation">Откључај ротацију</string>
+    <string name="cd_screen_rotation">Ротација екрана</string>
+    <string name="rotation_lock_landscape">Закључај хоризонтално</string>
+    <string name="rotation_lock_portrait">Закључај вертикално</string>
+    <string name="rotation_free">Слободна ротација</string>
     <string name="cd_rewind10">Премотај 10 секунди уназад</string>
     <string name="cd_forward10">Премотај 10 секунди унапред</string>
     <string name="cd_repeat_off">Понављање: искључено</string>
@@ -416,6 +430,8 @@
     <string name="settings_audio_focus_apps">Паузирај када друге апликације пуштају звук</string>
     <string name="settings_sponsor_block">SponsorBlock</string>
     <string name="settings_sponsor_block_hint">Аутоматски прескаче спонзорисане делове у YouTube видеима. Искључите за појединачни видео у „Сада се пушта“.</string>
+    <string name="settings_stable_volume">Стабилна јачина звука</string>
+    <string name="settings_stable_volume_hint">Уједначава гласне и тихе делове и пушта сваку песму сличном јачином.</string>
     <string name="sponsor_block_included">SponsorBlock је омогућен за овај видео</string>
     <string name="sponsor_block_excluded">SponsorBlock је онемогућен за овај видео</string>
     <string name="settings_sound">Звук</string>
@@ -538,6 +554,13 @@
     <string name="dialog_ok">Потврди</string>
     <string name="folder_picker_disabled">Системска апликација „Датотеке“ је искључена. Укључите је да бисте изабрали фолдер.</string>
     <string name="folder_picker_open_settings">Отвори подешавања</string>
+    <string name="folder_picker_title">Изаберите фасциклу са музиком</string>
+    <string name="folder_picker_use_folder">Користи ову фасциклу</string>
+    <string name="folder_picker_empty">Овде нема фасцикли</string>
+    <string name="folder_picker_storage_denied">Да бисте изабрали фасциклу, дозволите у подешавањима приступ музичким фајловима.</string>
+    <string name="folder_picker_companion_message">Овај уређај нема алатку за избор фасцикли. Да бисте бирали фасцикле, преузмите и инсталирајте са овог линка YMusic Files, малу помоћну апликацију за YMusic, па покушајте поново.</string>
+    <string name="folder_picker_companion_update">YMusic Files треба ажурирати да би радио са овом верзијом YMusic-а. Преузмите и инсталирајте најновију верзију са овог линка, па покушајте поново.</string>
+    <string name="folder_picker_companion_open">Отвори линк</string>
     <string name="folder_picker_missing">Овај уређај нема алатку за избор фолдера, па фолдер не може да се изабере.</string>
     <string name="error_supervised_account">Овај Google налог је под надзором, па се YouTube овде не може користити. Одјавите се или пређите на други налог.</string>
     <string name="settings_player_cache">Кеш плејера</string>
@@ -650,4 +673,41 @@
     <string name="download_quality_medium">Средњи</string>
     <string name="download_quality_best">Најбољи</string>
     <string name="download_kbps">%1$d kbps</string>
+
+    <!-- Windows refused a native library (desktop) -->
+    <string name="native_blocked">Windows је блокирао део апликације YMusic.</string>
+    <string name="media_engine_unavailable">Музика и видео снимци се овде не могу пуштати, али и даље можете да прегледате и претражујете.</string>
+    <string name="native_blocked_help">На пословном или школском рачунару замолите администратора да дозволи YMusic. На свом рачунару проверите Smart App Control у оквиру Windows Security.</string>
+    <!-- A feed reloading in place (desktop) -->
+    <string name="a11y_refreshing">Освежавање</string>
+    <string name="a11y_loading">Учитавање</string>
+    <!-- Download manager multi-select -->
+    <string name="select_all">Изабери све</string>
+    <string name="downloads_action_select">Изабери</string>
+    <plurals name="downloads_selected_count">
+        <item quantity="one">Изабрано: %1$d</item>
+        <item quantity="few">Изабрано: %1$d</item>
+        <item quantity="other">Изабрано: %1$d</item>
+    </plurals>
+    <plurals name="downloads_remove_selected_title">
+        <item quantity="one">Уклонити %1$d преузимање са листе?</item>
+        <item quantity="few">Уклонити %1$d преузимања са листе?</item>
+        <item quantity="other">Уклонити %1$d преузимања са листе?</item>
+    </plurals>
+    <string name="downloads_remove_selected_message">Завршене датотеке остају на овом уређају.</string>
+    <plurals name="downloads_delete_selected_title">
+        <item quantity="one">Избрисати %1$d датотеку?</item>
+        <item quantity="few">Избрисати %1$d датотеке?</item>
+        <item quantity="other">Избрисати %1$d датотека?</item>
+    </plurals>
+    <string name="downloads_delete_selected_message">Избрисане датотеке се не могу вратити.</string>
+    <string name="downloads_cancel_selected">Откажи преузимања</string>
+    <plurals name="downloads_cancel_selected_title">
+        <item quantity="one">Отказати %1$d преузимање?</item>
+        <item quantity="few">Отказати %1$d преузимања?</item>
+        <item quantity="other">Отказати %1$d преузимања?</item>
+    </plurals>
+    <string name="downloads_cancel_selected_message">Досад преузети садржај биће избрисан.</string>
+    <string name="downloads_cancel_selected_keep">Задржи</string>
+    <string name="data_dir_unusable">YMusic не може да отвори своју фасциклу са подацима, %1$s. Проверите да ли је то фасцикла у коју можете да уписујете, па поново отворите YMusic. (%2$s)</string>
 </resources>

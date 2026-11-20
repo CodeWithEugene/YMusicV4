@@ -1,0 +1,74 @@
+//! A row of text tabs with a 2 underline under the selected one (the JVM's UnderlineTabRow). Each
+//! tab is a focus stop, so Tab and the arrows reach it and the screen reader announces it.
+
+use std::rc::Rc;
+
+use gpui_kit::component::{ActiveTheme, StyledExt, h_flex};
+use gpui_kit::prelude::FluentBuilder;
+use gpui_kit::*;
+
+use crate::a11y::{DragRow, FocusList};
+use crate::settings_view::HOVER_ALPHA;
+
+pub fn tab_row(
+    id: &'static str,
+    labels: Vec<SharedString>,
+    selected: usize,
+    focus: &FocusList,
+    drag: &DragRow,
+    on_select: impl Fn(usize, &mut Window, &mut App) + 'static,
+    cx: &App,
+) -> impl IntoElement {
+    let theme = cx.theme();
+    let on_select = Rc::new(on_select);
+    let count = labels.len();
+    let mut row = h_flex()
+        .id(id)
+        .role(Role::TabList)
+        .gap_2()
+        .track_scroll(drag.scroll())
+        .overflow_x_scroll()
+        .restrict_scroll_to_axis();
+    for (index, label) in labels.into_iter().enumerate() {
+        let active = index == selected;
+        let on_select = on_select.clone();
+        let tab = div().id((id, index)).role(Role::Tab).aria_label(label.clone()).aria_selected(active);
+        let weight_copy = |semibold: bool| {
+            let color = match (semibold == active, active) {
+                (false, _) => transparent_black(),
+                (true, true) => theme.primary,
+                (true, false) => theme.muted_foreground,
+            };
+            div()
+                .col_start(1)
+                .row_start(1)
+                .text_center()
+                .map(|copy| if semibold { copy.font_semibold() } else { copy.font_medium() })
+                .text_color(color)
+                .child(label.clone())
+        };
+        // Both weights are always laid out in one cell, one hidden, so selecting never changes the width.
+        let text = div()
+            .grid()
+            .px_2()
+            .py(px(7.))
+            .rounded(px(6.))
+            .text_size(px(13.))
+            .hover(|style| style.bg(theme.primary.opacity(HOVER_ALPHA)))
+            .child(weight_copy(false))
+            .child(weight_copy(true));
+        row = row.child(
+            focus
+                .item_in(index, tab, Some(drag.scroll().clone()), cx)
+                .flex()
+                .flex_col()
+                .flex_shrink_0()
+                .rounded(px(6.))
+                .cursor_pointer()
+                .child(text)
+                .child(div().h(px(2.)).when(active, |indicator| indicator.bg(theme.primary)))
+                .on_click(move |_, window, cx| on_select(index, window, cx)),
+        );
+    }
+    drag.wrap(focus.container(row, 0..count, cx))
+}

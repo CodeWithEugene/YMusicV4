@@ -14,7 +14,7 @@ import projectcommon.error.CodedError
  * Only MP3 re-encodes: every source is lossy, so any other output just muxes the original streams.
  *
  * Every output goes through ffmpeg where it exists — not just to transcode/mux, but to embed the
- * metadata tags (title / artist / composer=videoId) into the container. iOS publishes the raw AAC M4A
+ * metadata tags (title / artist / composer=videoId|gain) into the container. iOS publishes the raw AAC M4A
  * stream and uses its native libav host to mux MP4 video. MP3, Opus and WebM remain unavailable there.
  */
 enum class DownloadFormat(val kind: DownloadKind, val fileExtension: String) {
@@ -141,6 +141,8 @@ class DownloadTask(
     /** The streams the scratches hold, kept across runs: their bytes can only continue those streams. */
     val audioStream: StreamId? = null,
     val videoStream: StreamId? = null,
+    /** dB from the file's measured loudness to its target; null until completed, or when unmeasured. */
+    val loudnessGainDb: Double? = null,
 ) {
     /** 0f..1f, or null when the total isn't known yet (before the first MEDIA_HEADER). */
     val progress: Float?

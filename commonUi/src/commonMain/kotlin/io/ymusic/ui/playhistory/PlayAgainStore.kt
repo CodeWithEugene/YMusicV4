@@ -4,6 +4,7 @@ import app.cash.sqldelight.db.QueryResult
 import app.cash.sqldelight.db.SqlCursor
 import app.cash.sqldelight.db.SqlDriver
 import io.ymusic.player.PlayableItem
+import io.ymusic.ui.localArtUrl
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -17,6 +18,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.put
 import projectcommon.json.bool
+import projectcommon.json.doubleOrNull
 import projectcommon.json.longOrNull
 import projectcommon.json.string
 import projectcommon.json.stringOrNull
@@ -218,11 +220,13 @@ private fun encodeItems(items: List<PlayableItem>): String = buildJsonArray {
                         put("type", TYPE_LOCAL)
                         put("uri", item.uri)
                         put("mediaId", item.mediaId)
+                        put("videoId", item.videoId)
                         put("title", item.title)
                         put("artist", item.artist)
                         put("album", item.album)
                         put("thumbnailUrl", item.thumbnailUrl)
                         put("durationMs", item.durationMs)
+                        put("loudnessGainDb", item.loudnessGainDb)
                     }
                     is PlayableItem.YtMedia -> {
                         put("type", TYPE_YT)
@@ -251,8 +255,10 @@ private fun decodeItems(json: String): List<PlayableItem> =
                 title = obj.stringOrNull("title"),
                 artist = obj.stringOrNull("artist"),
                 album = obj.stringOrNull("album"),
-                thumbnailUrl = obj.stringOrNull("thumbnailUrl"),
+                thumbnailUrl = obj.stringOrNull("thumbnailUrl") ?: obj.longOrNull("mediaId")?.let(::localArtUrl),
                 durationMs = obj.longOrNull("durationMs"),
+                loudnessGainDb = obj.doubleOrNull("loudnessGainDb"),
+                videoId = obj.stringOrNull("videoId"),
             )
             TYPE_YT -> PlayableItem.YtMedia(
                 videoId = obj.string("videoId"),

@@ -1,14 +1,25 @@
 package io.ymusic.ui
 
+import androidx.compose.foundation.border
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -23,7 +34,6 @@ import io.ymusic.ui.resources.Res
 import io.ymusic.ui.resources.a11y_duration_hours
 import io.ymusic.ui.resources.a11y_duration_minutes
 import io.ymusic.ui.resources.a11y_duration_seconds
-import org.jetbrains.compose.resources.pluralStringResource
 import kotlin.math.roundToInt
 
 /** A length in words, "1 hour 5 minutes 3 seconds": a clock like "1:05:03" reads digit by digit. */
@@ -34,9 +44,9 @@ internal fun spokenDuration(ms: Long): String {
     val m = (total % 3600 / 60).toInt()
     val s = (total % 60).toInt()
     return listOfNotNull(
-        if (h > 0) pluralStringResource(Res.plurals.a11y_duration_hours, h, h) else null,
-        if (m > 0) pluralStringResource(Res.plurals.a11y_duration_minutes, m, m) else null,
-        if (s > 0 || total == 0L) pluralStringResource(Res.plurals.a11y_duration_seconds, s, s) else null,
+        if (h > 0) pluralText(Res.plurals.a11y_duration_hours, h, h) else null,
+        if (m > 0) pluralText(Res.plurals.a11y_duration_minutes, m, m) else null,
+        if (s > 0 || total == 0L) pluralText(Res.plurals.a11y_duration_seconds, s, s) else null,
     ).joinToString(" ")
 }
 
@@ -111,5 +121,48 @@ internal fun Modifier.adjustable(
 /** A non-interactive node read as [spoken] instead of its visible text and children. */
 internal fun Modifier.spokenAs(spoken: String): Modifier = clearAndSetSemantics { text = AnnotatedString(spoken) }
 
+/**
+ * [label] for a clickable row that merges its children; those must be [a11ySilent]. Never
+ * contentDescription here: Android moves a merging node's description onto a separate unclickable
+ * node with the row's unclipped bounds, which TalkBack reads as plain text once the row is partly hidden.
+ */
+internal fun Modifier.a11yRowLabel(label: String): Modifier = semantics { text = AnnotatedString(label) }
+
 /** A node a screen reader skips: its text and children are already in an ancestor's label. */
 internal fun Modifier.a11ySilent(): Modifier = clearAndSetSemantics {}
+
+/** A white ring while the next focusable (a clickable after this) holds focus: D-pad and keyboard users must see it. */
+@Composable
+internal fun Modifier.focusRing(shape: Shape): Modifier {
+    var focused by remember { mutableStateOf(false) }
+    return onFocusChanged { focused = it.isFocused }
+        .then(if (focused) Modifier.border(FocusRingWidth, DesignColors.InkStrong, shape) else Modifier)
+}
+
+/**
+ * [focusRing] for an item a mouse click also focuses (desktop focuses on click): the ring shows for focus that
+ * the keyboard or a remote moved or acted on, not after a pointer press, until the next key.
+ */
+@Composable
+internal fun Modifier.keyboardFocusRing(shape: Shape): Modifier {
+    var focused by remember { mutableStateOf(false) }
+    var pressed by remember { mutableStateOf(false) }
+    return pointerInput(Unit) {
+        awaitPointerEventScope {
+            while (true) {
+                if (awaitPointerEvent(PointerEventPass.Initial).type == PointerEventType.Press) pressed = true
+            }
+        }
+    }
+        .onPreviewKeyEvent {
+            pressed = false
+            false
+        }
+        .onFocusChanged {
+            focused = it.isFocused
+            if (!it.isFocused) pressed = false
+        }
+        .then(if (focused && !pressed) Modifier.border(FocusRingWidth, DesignColors.InkStrong, shape) else Modifier)
+}
+
+private val FocusRingWidth = DesignSpacing.Space2 + DesignSpacing.Space2 / 2

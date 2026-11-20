@@ -3,6 +3,8 @@ package io.ymusic.ui
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.semantics.awtRole
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.semantics
@@ -12,7 +14,15 @@ import javax.accessibility.AccessibleRole
 
 internal actual val platformUsesTouch: Boolean = false
 
+internal actual val platformIsTelevision: Boolean = false
+
 internal actual val desktopLayoutHole: Boolean = true
+
+internal actual val contextMenuKey: Key = Key(java.awt.event.KeyEvent.VK_CONTEXT_MENU)
+
+internal actual val KeyEvent.isKeyRepeat: Boolean get() = false
+
+internal actual val KeyEvent.isLongPress: Boolean get() = false
 
 actual fun Modifier.a11yActionLabel(label: String?): Modifier =
     if (label.isNullOrEmpty()) this
@@ -38,12 +48,15 @@ internal actual fun PlatformBackHandler(enabled: Boolean, onBack: () -> Unit) {
 }
 
 @Composable
+internal actual fun rememberTouchExplorationEnabled(): Boolean = false
+
+@Composable
 internal actual fun SyncSystemBars(dark: Boolean) {
     // Desktop windows carry no app-tinted OS chrome.
 }
 
 @Composable
-internal actual fun SyncSensorRotation(locked: Boolean) = Unit
+internal actual fun SyncSensorRotation(rotation: VideoRotation) = Unit
 
 internal actual val rotationLockSupported: Boolean = false
 
@@ -55,6 +68,9 @@ internal actual fun KeepScreenOn(enabled: Boolean) = Unit
 
 @Composable
 internal actual fun Modifier.keepBelowStatusBar(): Modifier = this
+
+@Composable
+internal actual fun Modifier.fullscreenSidePadding(): Modifier = this
 
 @Composable
 internal actual fun Modifier.drawerEdgeGestureExclusion(enabled: Boolean): Modifier = this

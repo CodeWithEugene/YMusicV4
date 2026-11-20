@@ -71,6 +71,8 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.text
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.LayoutDirection
@@ -80,6 +82,7 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.sun.jna.Native
 import io.sentry.kotlin.multiplatform.Sentry
 import io.ymusic.desktop.media.MacDock
@@ -116,10 +119,12 @@ import io.ymusic.mediastore.mediaStoreJdbcDriver
 import io.ymusic.mediastore.model.BucketDraft
 import io.ymusic.mse.DesktopVideoSurface
 import io.ymusic.mse.FileAvNative
+import io.ymusic.mse.MseLibrary
 import io.ymusic.mse.PresentMode
 import io.ymusic.player.LocalPlayerContext
 import io.ymusic.player.PlaybackStatus
 import io.ymusic.player.PlayerEngines
+import io.ymusic.player.PlayerError
 import io.ymusic.player.createLocalPlayer
 import io.ymusic.player.createPlayer
 import io.ymusic.quickjs.QuickJsRuntime
@@ -135,12 +140,14 @@ import io.ymusic.telemetry.SentryLogger
 import io.ymusic.telemetry.applyYMusicTelemetry
 import io.ymusic.telemetry.bindCrashReporting
 import io.ymusic.telemetry.bindErrorPolicy
+import io.ymusic.telemetry.bindSentryTags
 import io.ymusic.telemetry.captureFeedbackReport
 import io.ymusic.telemetry.installErrorLogs
 import io.ymusic.telemetry.installSentryDesktopOsContext
 import io.ymusic.telemetry.installSentryDeviceId
 import io.ymusic.telemetry.installSentryEngineVersion
 import io.ymusic.telemetry.installSentryPlayerVersion
+import io.ymusic.telemetry.installSentryRemoteTags
 import io.ymusic.telemetry.shareLogTraceWithSentry
 import io.ymusic.ui.APP_HTTP_TIMEOUT
 import io.ymusic.ui.ActionIcon
@@ -148,6 +155,7 @@ import io.ymusic.ui.App
 import io.ymusic.ui.AppGraph
 import io.ymusic.ui.AppHttpClients
 import io.ymusic.ui.CatalogueScreen
+import io.ymusic.ui.CookieSignInScreen
 import io.ymusic.ui.FolderWriteProblem
 import io.ymusic.ui.IncomingLinks
 import io.ymusic.ui.ScanResult
@@ -176,9 +184,11 @@ import io.ymusic.ui.resources.playlist_menu_backup
 import io.ymusic.ui.resources.playlist_menu_restore
 import io.ymusic.ui.resources.sound_volume
 import io.ymusic.ui.resources.ymusic_logo
+import io.ymusic.ui.showsPause
 import io.ymusic.ui.sponsorblock.SqliteSponsorBlockStore
 import io.ymusic.ui.sponsorblock.sponsorBlockJdbcDriver
 import io.ymusic.ui.startupFailedMessage
+import io.ymusic.ytmedia.YOUTUBE_USER_AGENT
 import io.ymusic.ytmedia.cache.DiskMediaBlobCache
 import io.ymusic.ytmedia.cache.MediaCache
 import io.ymusic.ytmedia.cache.SqlDelightBlobIndex
@@ -216,6 +226,7 @@ import okio.Path.Companion.toPath
 import org.jetbrains.compose.resources.getString
 import org.jetbrains.compose.resources.painterResource
 import org.jetbrains.compose.resources.stringResource
+import projectcommon.error.PLAYBACK_UNAVAILABLE_CODE
 import projectcommon.error.TechnicalException
 import java.awt.BorderLayout
 import java.awt.Canvas
@@ -239,6 +250,7 @@ import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.system.exitProcess
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import java.awt.Color as AwtColor
@@ -247,14 +259,26 @@ import java.awt.Color as AwtColor
  * The desktop shell: boots the scraping engine, assembles the [AppGraph] (player facade over ffmpeg
  * local + MSE YouTube playback), and runs the shared [App].
  */
-private val logStore = LogStore(jvmLogDatabaseDriver(File(ymusicDataDir().apply { mkdirs() }, "logs.db").path))
+private val dataDirSetup: Result<DataDirSetup> = runCatching { prepareDataDir(ymusicDataDir()) }
 
-// The app log + Sentry events (no-op when Sentry wasn't initialized), and stdout in debug builds only.
-private val rootLogger: Logger =
-    TeeLogger(
-        DbLogger(logStore),
-        if (DEBUG_BUILD) TeeLogger(SentryLogger(), StdoutLogger()) else SentryLogger(),
-    ).also { it.bindMseNativeLogs() }
+// Sentry events (no-op when Sentry wasn't initialized), and stdout in debug builds only.
+private val consoleLogger: Logger = if (DEBUG_BUILD) TeeLogger(SentryLogger(), StdoutLogger()) else SentryLogger()
+
+private val logStore: LogStore = openLogStore()
+
+// The app log + the console logger.
+private val rootLogger: Logger = TeeLogger(DbLogger(logStore), consoleLogger).also { it.bindMseNativeLogs() }
+
+/** The app log in logs.db; in memory for this launch when that file cannot be opened. */
+private fun openLogStore(): LogStore {
+    val log = consoleLogger.fork("data-dir")
+    return try {
+        openDatabase(File(ymusicDataDir(), "logs.db"), log) { LogStore(jvmLogDatabaseDriver(it.path)) }
+    } catch (e: Exception) {
+        log.log(Logger.Level.WARN, "E92005 the app log (logs.db) did not open: lines are kept in memory only", e)
+        LogStore(jvmLogDatabaseDriver(":memory:"))
+    }
+}
 
 private val LOG_FLUSH_TIMEOUT = 3.seconds
 
@@ -284,11 +308,19 @@ private var mainWindow: Frame? = null
 fun main(args: Array<String>) {
     if (isWindows) WindowsAppId.claim(rootLogger.fork("app-id"))
     defaultLinuxSoftwareRendering()
+    dataDirSetup
+        .onSuccess { it.report(ymusicDataDir(), rootLogger.fork("data-dir")) }
+        .onFailure { error ->
+            dataDirUnusable(ymusicDataDir(), error, rootLogger.fork("data-dir"))
+            flushLogBeforeExit()
+            exitProcess(1)
+        }
     // The log moved to logs.db: the text log files of older builds go.
     File(ymusicDataDir(), "logs").listFiles { file -> file.name.startsWith("ymusic.log") }?.forEach { it.delete() }
     val launchFiles = launchFileUris(args.toList())
-    // macOS LaunchServices already keeps one app process; Windows and Linux start one per launch.
-    val instance = if (isWindows || isLinux) {
+    // macOS LaunchServices already keeps one app process; Windows and Linux start one per launch, and
+    // so does a dev workspace's `gradlew run` on any OS.
+    val instance = if (isWindows || isLinux || DevInstance.workspace != null) {
         val command = InstanceCommand.of(args.toList())
         val log = rootLogger.fork("instance")
         val claim = try {
@@ -309,6 +341,14 @@ fun main(args: Array<String>) {
         (claim as InstanceClaim.Owner?)?.instance
     } else {
         null
+    }
+
+    fun stopInstanceListening() {
+        try {
+            instance?.stopListening()
+        } catch (e: java.io.IOException) {
+            rootLogger.fork("instance").log(Logger.Level.WARN, "instance stop listening failed", e)
+        }
     }
     IncomingFiles.open(launchFiles)
     useBundledMseNatives()
@@ -357,12 +397,23 @@ fun main(args: Array<String>) {
                 it.dsn = SENTRY_DSN
                 // The commit in the release traces an event to git history (no source upload).
                 it.release = SENTRY_RELEASE
-                it.environment = if (DEBUG_BUILD) "debug" else "production"
+                it.environment = if (DEBUG_BUILD) "debug" else SENTRY_ENVIRONMENT
             }
             installSentryDeviceId(telemetryDeviceId)
             installSentryDesktopOsContext()
+            installSentryRemoteTags()
             shareLogTraceWithSentry()
         }
+    }
+    // Before the first window needs the answer, and off the EDT: this loads every libav DLL.
+    val mediaFailure = MseLibrary.loadFailure
+    val mediaProblem = mediaFailure?.let {
+        classifyNativeLoadFailure(it, NativeComponent.Media, windowsPolicyMessages(rootLogger.fork("native-libs")))
+    }
+
+    if (isLinux) {
+        runCatching { applyLinuxWmClass() }
+            .onFailure { rootLogger.fork("wm-class").log(Logger.Level.WARN, "dev workspace WM_CLASS not set", it) }
     }
 
     application {
@@ -397,6 +448,7 @@ fun main(args: Array<String>) {
         var graph by remember { mutableStateOf<AppGraph?>(null) }
         // Hoisted out of the window: whether the window may show at all depends on it.
         var bootError by remember { mutableStateOf<String?>(null) }
+        var bootProblem by remember { mutableStateOf<NativeLoadProblem?>(null) }
         var lockedCookies by remember { mutableStateOf<CookieStoreOpen.Locked?>(null) }
         var windowVisible by remember { mutableStateOf(true) }
         val (initialSize, initialPosition) = remember { loadWindowPrefs() }
@@ -410,11 +462,7 @@ fun main(args: Array<String>) {
             if (!frame.fullscreen) {
                 saveWindowPrefs(frame.persistSize(), frame.persistPosition())
             }
-            try {
-                instance?.stopListening()
-            } catch (e: java.io.IOException) {
-                rootLogger.fork("instance").log(Logger.Level.WARN, "instance stop listening failed", e)
-            }
+            stopInstanceListening()
             windowVisible = false
             graph?.player?.clearQueue()
             quitScope.launch {
@@ -456,6 +504,12 @@ fun main(args: Array<String>) {
         }
         LaunchedEffect(windowVisible, windowState.isMinimized) {
             videoUnderlay.shown = windowVisible && !windowState.isMinimized
+            QuickJsRuntime.timersInBackground = !windowVisible || windowState.isMinimized
+        }
+        // Out of sight, video plays as audio only; the quality comes back with the window.
+        LaunchedEffect(graph, windowVisible, windowState.isMinimized) {
+            val pip = graph?.pip ?: return@LaunchedEffect
+            if (windowVisible && !windowState.isMinimized) pip.onEnterForeground() else pip.onWindowHidden()
         }
         val volumeToastScope = rememberCoroutineScope()
         val showVolume: (Float) -> Unit = { volume ->
@@ -467,13 +521,13 @@ fun main(args: Array<String>) {
             // Held back until the graph is ready: an empty window that then repaints is a flash of
             // whatever the toolkit felt like showing. Composed all along, so paintWindowGround has
             // already coloured it by the time it appears.
-            visible = windowVisible && (graph != null || bootError != null || lockedCookies != null),
+            visible = windowVisible && (graph != null || bootError != null || bootProblem != null || lockedCookies != null),
             onCloseRequest = {
                 // A non-empty queue → the close button minimizes to the system tray and playback
                 // carries on; an empty queue → quit.
                 if (graph?.player?.queue?.value?.items?.isNotEmpty() == true) windowVisible = false else quit()
             },
-            title = "YMusic",
+            title = DevInstance.appTitle,
             icon = null,
             state = windowState,
             undecorated = true,
@@ -488,7 +542,8 @@ fun main(args: Array<String>) {
             },
             onKeyEvent = { event -> handleArrowShortcut(event, graph?.player, showVolume) },
         ) {
-            paintWindowGround(Color.Transparent)
+            if (isWindows) followRendererTransparency() else paintWindowGround(Color.Transparent)
+            LaunchedEffect(window) { window.minimumSize = minimumWindowSize() }
             // Not Window(icon=): that is one 32dp raster the OS nearest-scales into each of its
             // icon slots (Windows: 16/20/24/32/40/48/64/256 px by DPI). One exact raster per slot.
             // macOS ignores window icons (the Dock tile is set above).
@@ -512,12 +567,14 @@ fun main(args: Array<String>) {
                 DisposableEffect(window) {
                     frame.host = window
                     mainWindow = window
-                    FileAvNative.onFullScreen = { on ->
-                        SwingUtilities.invokeLater { frame.onNativeFullscreen(on) }
+                    if (mediaFailure == null) {
+                        FileAvNative.onFullScreen = { on ->
+                            SwingUtilities.invokeLater { frame.onNativeFullscreen(on) }
+                        }
+                        SwingUtilities.invokeLater { FileAvNative.prepareFullscreen(window) }
                     }
-                    SwingUtilities.invokeLater { FileAvNative.prepareFullscreen(window) }
                     onDispose {
-                        FileAvNative.onFullScreen = null
+                        if (mediaFailure == null) FileAvNative.onFullScreen = null
                         if (mainWindow === window) mainWindow = null
                     }
                 }
@@ -575,11 +632,15 @@ fun main(args: Array<String>) {
                             )
                         }
                         Text(
-                            "YMusic",
+                            DevInstance.appTitle,
                             color = if (darkBar) Color.White else palette.InkStrong,
                             fontSize = 13.sp,
                             fontWeight = FontWeight.Medium,
-                            modifier = Modifier.align(Alignment.Center),
+                            textAlign = TextAlign.Center,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            // Clear of the traffic lights and the pin, however long a dev branch name runs.
+                            modifier = Modifier.align(Alignment.Center).fillMaxWidth(0.5f),
                         )
                         var alwaysOnTop by remember { mutableStateOf(window.isAlwaysOnTop) }
                         LaunchedEffect(alwaysOnTop) {
@@ -655,14 +716,25 @@ fun main(args: Array<String>) {
                     val bootScope = rememberCoroutineScope()
 
                     suspend fun boot(open: suspend () -> CookieSession?) {
+                        val log = rootLogger.fork("boot")
                         try {
                             val session = open() ?: return
-                            graph = buildGraph(settings, session)
+                            graph = buildGraph(settings, session, mediaProblem, beforeRelaunch = ::stopInstanceListening)
                         } catch (c: kotlinx.coroutines.CancellationException) {
                             throw c // the effect was disposed — not a boot failure
                         } catch (t: Throwable) {
-                            rootLogger.fork("boot").captureError(t)
-                            bootError = t.message ?: t.toString()
+                            val problem = classifyNativeLoadFailure(t, NativeComponent.Engine, windowsPolicyMessages(log))
+                            if (problem == null) {
+                                log.captureError(t)
+                                bootError = t.message ?: t.toString()
+                            } else {
+                                bootProblem = problem
+                                reportNativeLoadProblem(problem, NativeComponent.Engine, t, settings, APP_VERSION_CODE, log)
+                            }
+                            return
+                        }
+                        if (mediaProblem != null && mediaFailure != null) {
+                            reportNativeLoadProblem(mediaProblem, NativeComponent.Media, mediaFailure, settings, APP_VERSION_CODE, log)
                         }
                     }
                     LaunchedEffect(Unit) {
@@ -684,6 +756,7 @@ fun main(args: Array<String>) {
                                 bootError != null -> Booting {
                                     Text(startupFailedMessage("$bootError"), color = MaterialTheme.colorScheme.error)
                                 }
+                                bootProblem != null -> Booting { AppUnavailableMessage(bootProblem!!) }
                                 graph == null && lockedCookies != null -> CookieUnlockScreen(
                                     locked = lockedCookies!!,
                                     logger = rootLogger.fork("cookies"),
@@ -695,7 +768,9 @@ fun main(args: Array<String>) {
                                 // No spinner while the graph builds: the window paints the app's own ground until
                                 // the first frame has something in it.
                                 graph == null -> Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background))
-                                else -> App(graph!!, catalogue = if (DEBUG_BUILD) ({ CatalogueScreen() }) else null)
+                                else -> WithMediaBanner(mediaProblem) {
+                                    App(graph!!, catalogue = if (DEBUG_BUILD) ({ CatalogueScreen() }) else null)
+                                }
                             }
                         }
                     }
@@ -715,7 +790,7 @@ fun main(args: Array<String>) {
                 if (!queueNotEmpty) miniOpen = false
             }
         }
-        val playing = graph?.player?.status?.collectAsState()?.value?.playWhenReady == true
+        val playing = graph?.player?.status?.collectAsState()?.value?.showsPause() == true
         val playerMenu = rememberPlayerMenu(
             playing = playing,
             hasQueue = queueNotEmpty,
@@ -780,13 +855,6 @@ fun main(args: Array<String>) {
                     windowVisible = true
                     miniOpen = false
                 },
-                onDismiss = {
-                    // End the listening session: the queue clears (which retires the tray icon),
-                    // and with no window left the app exits; an open window keeps running.
-                    miniOpen = false
-                    g.player.clearQueue()
-                    if (!windowVisible) quit()
-                },
                 onClose = { miniOpen = false },
             )
         }
@@ -796,7 +864,12 @@ fun main(args: Array<String>) {
     }
 }
 
-private suspend fun buildGraph(settings: AppStoreSettings, session: CookieSession): AppGraph {
+private suspend fun buildGraph(
+    settings: AppStoreSettings,
+    session: CookieSession,
+    mediaProblem: NativeLoadProblem?,
+    beforeRelaunch: () -> Unit,
+): AppGraph {
     val dataDir = ymusicDataDir().apply { mkdirs() }
     // File-backed jar for YouTube (engine cookie/get|set + player + proxy) and the YMusic API.
     // Desktop has no WebView cookie store: sign-in imports cookies from a phone QR or a browser paste.
@@ -840,6 +913,7 @@ private suspend fun buildGraph(settings: AppStoreSettings, session: CookieSessio
     ).also { it.checkUpdate() } // app open is itself a hotpoint
     installErrorLogs(logStore, remoteConfig, APP_VERSION_CODE)
     bindErrorPolicy(backgroundScope, remoteConfig, rootLogger.fork("error-policy"))
+    bindSentryTags(backgroundScope, remoteConfig)
     backgroundScope.launch {
         // The cap waits for the loaded config: the store trims nothing until it has one.
         remoteConfig.awaitLoaded()
@@ -873,7 +947,10 @@ private suspend fun buildGraph(settings: AppStoreSettings, session: CookieSessio
         logger = rootLogger,
         ioDispatcher = Dispatchers.IO,
     )
-    val engineCache = desktopEngineCacheStore(File(session.cacheRoot, ENGINE_CACHE_DIR), rootLogger)
+    val engineCacheDir = File(session.cacheRoot, ENGINE_CACHE_DIR)
+    val engineCache = openDatabase(File(engineCacheDir, "engine-cache.db"), rootLogger.fork("data-dir")) {
+        desktopEngineCacheStore(engineCacheDir, rootLogger)
+    }
     val engines = withContext(Dispatchers.IO) {
         DynamicEngineManager(
             http.engine,
@@ -882,6 +959,7 @@ private suspend fun buildGraph(settings: AppStoreSettings, session: CookieSessio
             cacheStore = engineCache,
             cookieJar = cookies,
             settings = settings,
+            remoteFeature = { remoteConfig.awaitLoaded().features.getByKey(it) },
             strictStints = DEBUG_BUILD,
             // Every Sentry event and service call names the engine-js bundle that was live (start + each swap).
             onBackendVersion = { version ->
@@ -895,12 +973,12 @@ private suspend fun buildGraph(settings: AppStoreSettings, session: CookieSessio
     engines.start()
 
     val mediaStore = withContext(Dispatchers.IO) {
-        BetterMediaStore.create(mediaStoreJdbcDriver(File(dataDir, "media-store.db").absolutePath))
+        openDatabase(File(dataDir, "media-store.db"), rootLogger.fork("data-dir")) {
+            BetterMediaStore.create(mediaStoreJdbcDriver(it.absolutePath))
+        }
     }
 
-    // Thumbnails: everything is a fetcher — http on a cache-less client (originals stream to the
-    // fetcher's disk cache, decode from file) + local files + ffmpeg-extracted embedded art
-    // (absent ffmpeg just keeps art:// urls unresolved → placeholder boxes).
+    // Without ffmpeg no fetcher takes art:// at all, so every art:// url (even art://yt) shows the view's placeholder.
     val imageNetworkFetcher = networkFetcher(
         http.image,
         FileSystem.SYSTEM,
@@ -916,7 +994,9 @@ private suspend fun buildGraph(settings: AppStoreSettings, session: CookieSessio
                     FfmpegMetadataGetter(it),
                     mediaStore,
                     loaderYoutubeArt { checkNotNull(loaderRef) },
+                    rootLogger.fork("local-art"),
                     coverCache = ImageSourceCache(FileSystem.SYSTEM, File(dataDir, "image-cover-cache").absolutePath.toPath(), 64L * 1024 * 1024),
+                    extractorVersion = APP_VERSION_CODE.toString(),
                 )
             },
         ),
@@ -956,18 +1036,19 @@ private suspend fun buildGraph(settings: AppStoreSettings, session: CookieSessio
         }
         LocalMediaProxy(
             playerCache, client,
-            userAgent = DESKTOP_CHROME_UA,
+            userAgent = YOUTUBE_USER_AGENT,
             logger = rootLogger,
             // Chatty per-part/decision logs; -Dio.ymusic.player.verbose overrides the build default.
             verbose = System.getProperty("io.ymusic.player.verbose")?.toBoolean() ?: DEBUG_BUILD,
             // -Dymusic.player.serveSabrHits=false → fill-only, to test whether synthesized hits wedge switches.
             serveSabrHits = System.getProperty("io.ymusic.player.serveSabrHits", "true").toBoolean(),
+            cacheEnabled = { remoteConfig.config.value.features.playerCacheEnabled },
         )
     }
 
     var ytEngine: io.ymusic.player.YtEngine? = null
     val player = withContext(Dispatchers.Main) {
-        wireVideoOnce(backgroundScope)
+        if (mediaProblem == null) wireVideoOnce(backgroundScope)
         createPlayer(
             PlayerEngines(
                 local = { createLocalPlayer(LocalPlayerContext(videoSurface, resolveFfmpeg())) },
@@ -979,6 +1060,7 @@ private suspend fun buildGraph(settings: AppStoreSettings, session: CookieSessio
                         cacheStore = engineCache,
                         cookieJar = cookies,
                         settings = settings,
+                        remoteFeature = { remoteConfig.awaitLoaded().features.getByKey(it) },
                         videoSurface = mseSurface,
                         main = engines,
                         mediaProxy = mediaProxy,
@@ -1003,20 +1085,29 @@ private suspend fun buildGraph(settings: AppStoreSettings, session: CookieSessio
                         mseViewport?.let { (w, h) -> it.setViewport(w, h) }
                     }
                 },
+                unavailable = mediaProblem?.let {
+                    PlayerError(PlayerError.PLAYBACK_UNAVAILABLE, "media library did not load", canRetry = false)
+                },
             ),
         )
     }
 
     // OS media surface + media keys (macOS Now Playing, Linux MPRIS, Windows SMTC). Commands come
-    // back on the Main dispatcher, where the player is driven.
-    connectMediaSession(player, CoroutineScope(Dispatchers.Main), imageLoader, rootLogger.fork("now-playing")) {
-        showWindowRequests.tryEmit(Unit)
+    // back on the Main dispatcher, where the player is driven. A dev workspace's run leaves the media
+    // keys to the other apps unless YMUSIC_DEV_MEDIA_SESSION=1.
+    if (DevInstance.usesMediaSession) {
+        connectMediaSession(player, CoroutineScope(Dispatchers.Main), imageLoader, rootLogger.fork("now-playing")) {
+            showWindowRequests.tryEmit(Unit)
+        }
+    } else {
+        rootLogger.fork("now-playing").log(Logger.Level.INFO, "dev workspace: no OS media session (YMUSIC_DEV_MEDIA_SESSION=1 opens one)")
     }
 
     // Offline downloads: SABR stack over ffmpeg. Spec comes from the MSE engine's cached
     // /player + decoded googlevideo URL (preload if that video is not already cached).
     val downloadService = withContext(Dispatchers.IO) {
         val ffmpegPath = resolveFfmpeg()
+        if (ffmpegPath == null) rootLogger.fork("ffmpeg").log(Logger.Level.WARN, "no executable ffmpeg found")
         val ffmpeg = ffmpegPath?.let { io.ymusic.download.Ffmpeg(it) }
         // Probes a finished download's metadata into its Library bucket (same path as the folder scan);
         // null without ffmpeg → registerCompletedDownload falls back to a hand-built draft.
@@ -1027,10 +1118,9 @@ private suspend fun buildGraph(settings: AppStoreSettings, session: CookieSessio
                 FfmpegMetadataExtractor(FfmpegMetadataGetter(it)),
             )
         }
-        val store = io.ymusic.download.DownloadStore(
-            io.ymusic.download.downloadDatabaseJdbcDriver("jdbc:sqlite:${File(dataDir, "downloads.db").absolutePath}"),
-            rootLogger,
-        )
+        val store = openDatabase(File(dataDir, "downloads.db"), rootLogger.fork("data-dir")) {
+            io.ymusic.download.DownloadStore(io.ymusic.download.downloadDatabaseJdbcDriver("jdbc:sqlite:${it.absolutePath}"), rootLogger)
+        }
         val sabrClient = KmpHttpClient.create {
             defaultExecuteTimeout = APP_HTTP_TIMEOUT
             logger = rootLogger.fork("kmphttp")
@@ -1039,21 +1129,24 @@ private suspend fun buildGraph(settings: AppStoreSettings, session: CookieSessio
         }
         val resolver = YtEngineSabrSpecResolver {
             withContext(Dispatchers.Main) { player.prepareYoutubeEngine() }
-            ytEngine ?: error("youtube engine missing")
+            ytEngine ?: if (mediaProblem != null) {
+                throw TechnicalException(PLAYBACK_UNAVAILABLE_CODE, "media library did not load")
+            } else {
+                error("youtube engine missing")
+            }
         }
         // Own segment index (byte range per segment) → SABR resume across pause/re-attest. Separate from
         // the player cache DB: downloads store bytes in their own file, not the player blob cache.
-        val segmentIndex = SqlDelightSegmentIndex(
-            jvmSegmentDatabaseDriver("jdbc:sqlite:${File(dataDir, "download-segments.db").absolutePath}"),
-            now = { System.currentTimeMillis() },
-        )
+        val segmentIndex = openDatabase(File(dataDir, "download-segments.db"), rootLogger.fork("data-dir")) {
+            SqlDelightSegmentIndex(jvmSegmentDatabaseDriver("jdbc:sqlite:${it.absolutePath}"), now = { System.currentTimeMillis() })
+        }
         io.ymusic.download.DownloadService(
             store = store,
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
             now = { System.currentTimeMillis() },
             resolver = resolver,
             client = sabrClient,
-            userAgent = DESKTOP_CHROME_UA,
+            userAgent = YOUTUBE_USER_AGENT,
             ffmpeg = ffmpeg,
             storage = io.ymusic.download.DefaultDownloadStorage(
                 FileSystem.SYSTEM,
@@ -1094,6 +1187,7 @@ private suspend fun buildGraph(settings: AppStoreSettings, session: CookieSessio
             updateScope,
             freshConfig = { remoteConfig.awaitFresh(timeoutMs = 3_000L) },
             downloadSite = { remoteConfig.config.value.features.downloadPageUrl },
+            beforeRelaunch = beforeRelaunch,
         )
     } else {
         null
@@ -1106,10 +1200,12 @@ private suspend fun buildGraph(settings: AppStoreSettings, session: CookieSessio
         logger = rootLogger,
         playerCache = playerCache,
         mediaStore = mediaStore,
-        playHistory = PlayHistoryStore(playHistoryJdbcDriver(File(dataDir, "play-history.db").absolutePath)),
-        sponsorBlockStore = SqliteSponsorBlockStore(
-            sponsorBlockJdbcDriver(File(dataDir, "sponsor-block.db").absolutePath),
-        ),
+        playHistory = openDatabase(File(dataDir, "play-history.db"), rootLogger.fork("data-dir")) {
+            PlayHistoryStore(playHistoryJdbcDriver(it.absolutePath))
+        },
+        sponsorBlockStore = openDatabase(File(dataDir, "sponsor-block.db"), rootLogger.fork("data-dir")) {
+            SqliteSponsorBlockStore(sponsorBlockJdbcDriver(it.absolutePath))
+        },
         scanLibraryFolder = { onProgress -> scanPickedFolder(mediaStore, onProgress) },
         libraryFolderPicker = { pickAndRegisterFolder(mediaStore) },
         canWriteFolder = { uri -> File(Uri.parse(uri).filePath()).let { it.isDirectory && it.canWrite() } },
@@ -1142,14 +1238,19 @@ private suspend fun buildGraph(settings: AppStoreSettings, session: CookieSessio
         loginBrowser = null,
         guest = session.isGuest,
         cookieSignIn = if (session.isGuest) null else { onComplete, onBack ->
-            DesktopCookieSignIn(
+            CookieSignInScreen(
                 api = api,
                 importCookies = { cookies.importSessionCookies(it) },
                 loginStatus = { engines.ytLoginStatus() },
-                protectWithPassword = if (session.canProtect) session::protect else null,
                 logger = rootLogger,
                 onComplete = onComplete,
                 onBack = onBack,
+                pasteGuide = { CookieCopyGuide() },
+                afterSignIn = if (session.canProtect) {
+                    { done -> CookieProtectStep(protect = session::protect, logger = rootLogger.fork("cookies"), onDone = done) }
+                } else {
+                    null
+                },
             )
         },
         downloads = downloadService,
@@ -1197,8 +1298,8 @@ private fun DesktopPlayerSurface(
     playbackStatus: kotlinx.coroutines.flow.StateFlow<PlaybackStatus>,
     modifier: Modifier,
 ) {
-    val status by playbackStatus.collectAsState()
-    val windowResizingNow by windowResizing.collectAsState()
+    val status by playbackStatus.collectAsStateWithLifecycle()
+    val windowResizingNow by windowResizing.collectAsStateWithLifecycle()
     LaunchedEffect(status.playWhenReady, windowResizingNow) {
         if (status.playWhenReady && !windowResizingNow) videoPanel.setCovered(false)
     }
@@ -1545,7 +1646,8 @@ private fun loadWindowPrefs(): Pair<DpSize, WindowPosition> {
     val w = p.getProperty("width")?.toFloatOrNull()
     val h = p.getProperty("height")?.toFloatOrNull()
     // Sanity floor: never restore a degenerate size a bad write (or a past bug) left behind.
-    val size = if (w != null && h != null && w >= 320f && h >= 480f) DpSize(w.dp, h.dp) else defaultWindowSize
+    val fits = w != null && h != null && w >= MIN_WINDOW_WIDTH && h >= MIN_WINDOW_HEIGHT
+    val size = if (fits) DpSize(w.dp, h.dp) else defaultWindowSize
     val x = p.getProperty("x")?.toFloatOrNull()
     val y = p.getProperty("y")?.toFloatOrNull()
     val position = when {
@@ -1586,7 +1688,8 @@ private fun saveWindowPrefs(size: DpSize, position: WindowPosition) {
 /** Sends the app logs as one anonymous Sentry report for the Feedback screen. */
 private val captureFeedbackReportAction: suspend (String, String?) -> Unit = { subject, message ->
     withContext(Dispatchers.IO) {
-        val export = File(System.getProperty("java.io.tmpdir"), FEEDBACK_LOG_NAME)
+        val exportName = DevInstance.workspaceTag?.let { "dev$it-$FEEDBACK_LOG_NAME" } ?: FEEDBACK_LOG_NAME
+        val export = File(System.getProperty("java.io.tmpdir"), exportName)
         // The report still goes without the log when the export fails or the log store is stuck.
         val attachments = try {
             withTimeoutOrNull(FEEDBACK_EXPORT_TIMEOUT_MS) { logStore.exportGzip(FileSystem.SYSTEM, export.absolutePath.toPath()) }
@@ -1770,10 +1873,6 @@ private val videoWired = java.util.concurrent.atomic.AtomicBoolean(false)
 
 /** Mounted [DesktopPlayerSurface] call sites; the hole closes only when none is left. EDT only. */
 private var surfaceMountCount = 0
-
-private const val DESKTOP_CHROME_UA =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
-        "(KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
 
 /** A file packed into the app jar (the staged engine bundle + version — see stageEngineJs). */
 private fun readAppResource(name: String): String =

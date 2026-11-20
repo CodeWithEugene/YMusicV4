@@ -20,6 +20,7 @@ import {
 } from "./session";
 import { localeOptions } from "./locales";
 import { harvestCommand, recommendedPage } from "./recommended";
+import { showPlaylistId } from "./musicParse";
 import {
   collectItems,
   collectPage,
@@ -203,13 +204,14 @@ onAccept(
   }),
 );
 
-// Trending Music: {} — the region's charts, a single page (charts publish no continuation).
-// The whole request lives on charts.youtube.com with its own client; see charts.ts.
+// Top charts: {"refresh"?} — youtube.com/music for the region, one page (see charts.ts). A user
+// reload sets refresh, which skips the day-long cached copy.
 onAccept(
   "yt/trending",
   commandHandler(async (src, out) => {
     const args = await src.readJsonObject();
-    await writePage(out, await trendingMusicPage(hostLogger(args, "yt/trending")));
+    const log = hostLogger(args, "yt/trending");
+    await writePage(out, await trendingMusicPage(log, args["refresh"] === true));
   }),
 );
 
@@ -579,13 +581,16 @@ onAccept(
   }),
 );
 
-/** The playlist an app link plays: "/playlist?list=<id>", or a YouTube Music "…?id=VL<id>" page. */
+/** The playlist an app link plays: "/playlist?list=<id>", or a YouTube Music "…?id=VL<id>" page or
+ *  podcast show. */
 function queuePlaylistId(url: string): string {
   const query = urlQuery(url);
   const list = query["list"];
   if (list !== undefined) return list;
   const id = query["id"];
   if (id !== undefined && id.indexOf("VL") === 0) return id.slice(2);
+  const show = showPlaylistId(id);
+  if (show !== undefined) return show;
   throw JsEngineErrorImpl.parse("yt/queue url names no playlist: " + url);
 }
 

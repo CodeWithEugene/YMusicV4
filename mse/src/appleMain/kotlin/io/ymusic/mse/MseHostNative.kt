@@ -13,6 +13,7 @@ import io.ymusic.mse.cinterop.mse_host_set_js_event
 import io.ymusic.mse.cinterop.mse_host_set_pitch
 import io.ymusic.mse.cinterop.mse_host_set_preamp
 import io.ymusic.mse.cinterop.mse_host_set_speed
+import io.ymusic.mse.cinterop.mse_host_set_video_hidden
 import io.ymusic.mse.cinterop.mse_host_set_video_surface
 import io.ymusic.mse.cinterop.mse_host_set_virtualizer
 import io.ymusic.mse.cinterop.mse_host_set_volume
@@ -155,6 +156,11 @@ actual object MseHostNative {
         mse_host_set_preamp(handle.toCPointer<COpaque>(), db)
     }
 
+    actual fun setVideoHidden(handle: Long, hidden: Boolean) {
+        if (handle == 0L) return
+        mse_host_set_video_hidden(handle.toCPointer<COpaque>(), if (hidden) 1 else 0)
+    }
+
     actual fun pcmLevels(handle: Long, out: FloatArray): Int {
         if (handle == 0L || out.isEmpty()) return 0
         return out.usePinned { pinned ->
@@ -165,14 +171,14 @@ actual object MseHostNative {
     actual fun muxM4a(audioPath: String, coverPath: String?, outputPath: String, title: String, artist: String?, videoId: String) {
         val result = mse_ios_mux_m4a(audioPath, coverPath, outputPath, title, artist, videoId)
         if (result != 0) {
-            throw TechnicalException("E80077", mse_ios_mux_error()?.toKString() ?: "iOS M4A mux failed")
+            throw TechnicalException("E80080", mse_ios_mux_error()?.toKString() ?: "iOS M4A mux failed")
         }
     }
 
     actual fun muxMp4(videoPath: String, audioPath: String, outputPath: String, title: String, artist: String?, videoId: String) {
         val result = mse_ios_mux_mp4(videoPath, audioPath, outputPath, title, artist, videoId)
         if (result != 0) {
-            throw TechnicalException("E80077", mse_ios_mux_error()?.toKString() ?: "iOS MP4 mux failed")
+            throw TechnicalException("E80079", mse_ios_mux_error()?.toKString() ?: "iOS MP4 mux failed")
         }
     }
 

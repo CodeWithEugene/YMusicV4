@@ -11,29 +11,36 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.FileDownload
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FloatingActionButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -42,11 +49,19 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.input.InputMode
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalInputModeManager
+import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.ymusic.download.DownloadFolderAccessException
 import io.ymusic.download.DownloadFormat
 import io.ymusic.download.DownloadService
@@ -67,6 +82,11 @@ import io.ymusic.ui.resources.download_size_mb
 import io.ymusic.ui.resources.downloads_action_pause
 import io.ymusic.ui.resources.downloads_action_resume
 import io.ymusic.ui.resources.downloads_action_reveal_library
+import io.ymusic.ui.resources.downloads_action_select
+import io.ymusic.ui.resources.downloads_cancel_selected
+import io.ymusic.ui.resources.downloads_cancel_selected_keep
+import io.ymusic.ui.resources.downloads_cancel_selected_message
+import io.ymusic.ui.resources.downloads_cancel_selected_title
 import io.ymusic.ui.resources.downloads_completed_date
 import io.ymusic.ui.resources.downloads_empty_all
 import io.ymusic.ui.resources.downloads_empty_completed
@@ -85,6 +105,8 @@ import io.ymusic.ui.resources.downloads_filter_waiting
 import io.ymusic.ui.resources.downloads_none_message
 import io.ymusic.ui.resources.downloads_none_title
 import io.ymusic.ui.resources.downloads_pause_all
+import io.ymusic.ui.resources.downloads_remove_selected_message
+import io.ymusic.ui.resources.downloads_remove_selected_title
 import io.ymusic.ui.resources.downloads_resume_all
 import io.ymusic.ui.resources.downloads_state_canceled
 import io.ymusic.ui.resources.downloads_state_done
@@ -97,6 +119,7 @@ import io.ymusic.ui.resources.downloads_unavailable
 import io.ymusic.ui.resources.menu_add_to_playlist
 import io.ymusic.ui.resources.menu_play
 import io.ymusic.ui.resources.menu_remove
+import io.ymusic.ui.resources.menu_remove_folder
 import io.ymusic.ui.resources.menu_remove_from_disk
 import io.ymusic.ui.resources.menu_rename
 import io.ymusic.ui.resources.month_abbr
@@ -109,8 +132,14 @@ import kmpcommon.uri.Uri
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.IO
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.mapNotNull
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
@@ -120,6 +149,8 @@ import org.jetbrains.compose.resources.stringResource
 import projectcommon.error.Playability
 import projectcommon.error.errorCode
 import projectcommon.error.playabilityOf
+import projectcommon.log.captureUnlessEnvironmental
+import kotlin.time.Duration.Companion.seconds
 
 /**
  * The Download Manager: a status filter chip row over one flat adaptive grid (one column on a phone,
@@ -136,8 +167,22 @@ fun DownloadsScreen(graph: AppGraph, coordinator: PlaybackCoordinator) {
     }
     // Own the aggregator for as long as this screen is composed: it seeds once and folds change events,
     // and is dropped (its DB subscription cancelled) when the user leaves.
-    val aggregator = remember(service) { DownloadTasksAggregator(service::snapshot, service.changes) }
-    val tasks by aggregator.tasks.collectAsState(emptyList())
+    var reloads by remember { mutableIntStateOf(0) }
+    var loadError by remember { mutableStateOf<String?>(null) }
+    val aggregator = remember(service, reloads) { DownloadTasksAggregator(service::snapshot, service.changes) }
+    val tasks by remember(aggregator) {
+        aggregator.tasks.catch { e ->
+            graph.logger?.fork("downloads")?.captureUnlessEnvironmental(e, "download list failed to load")
+            loadError = e.errorCode() ?: "E70081"
+        }
+    }.collectAsStateWithLifecycle(emptyList())
+    loadError?.let { code ->
+        ErrorState(code) {
+            loadError = null
+            reloads++
+        }
+        return
+    }
 
     val visible = tasks.filter { it.state != DownloadState.CANCELED }
     if (visible.isEmpty()) {
@@ -164,6 +209,10 @@ fun DownloadsScreen(graph: AppGraph, coordinator: PlaybackCoordinator) {
     // Report scroll into the shell's ScrollHost so the shared app bar lifts on scroll, like Library/Discover.
     val gridState = rememberLazyGridState()
     TrackScroll { gridState.canScrollBackward }
+    // A lazy grid top-aligns a row's cards at their own heights: each card reports its natural height and
+    // takes its row's tallest as a minimum.
+    val columns by remember(gridState) { derivedStateOf { gridState.layoutInfo.maxSpan } }
+    val naturalHeights = remember { mutableStateMapOf<String, Int>() }
 
     val navigate = LocalNavigateToSection.current
     val folderReveal = LocalLibraryFolderReveal.current
@@ -189,12 +238,101 @@ fun DownloadsScreen(graph: AppGraph, coordinator: PlaybackCoordinator) {
             Playability.RetryLater -> Unit
         }
     }
+    val canPickFolder = graph.libraryFolderPicker != null
+    val retry: (DownloadTask) -> Unit = { task ->
+        when (val route = retryRoute(task, canPickFolder, signIn)) {
+            RetryRoute.Direct -> service.retry(task.id)
+            RetryRoute.RepickFolder -> scope.launch { if (pickDownloadFolder(graph, snackbar, scans)) service.retry(task.id) }
+            is RetryRoute.Prompt -> retryBlock = RetryBlock(task.id, route.verdict)
+        }
+    }
+
+    val multiSelection = rememberMultiSelection<String>()
+    val visibleIds = visible.mapTo(HashSet()) { it.id }
+    val shownIds = shown.map { it.id }
+    LaunchedEffect(shownIds) { naturalHeights.keys.retainAll(shownIds.toSet()) }
+    LaunchedEffect(visibleIds) { multiSelection.retain(visibleIds) }
+    LaunchedEffect(shownIds) { multiSelection.forgetSelectAll() }
+    val selection = multiSelection.selected intersect visibleIds
+    val selecting = selection.isNotEmpty()
+    val endSelection = { multiSelection.end() }
+    val keyboardMode = LocalInputModeManager.current.inputMode == InputMode.Keyboard
+    MultiSelectionEffects(multiSelection, shownIds) { index ->
+        // The filter chips are the grid's first item.
+        val gridIndex = index + 1
+        if (gridState.layoutInfo.visibleItemsInfo.none { it.index == gridIndex }) gridState.scrollToItem(gridIndex)
+    }
+    val selectedTasks = visible.filter { it.id in selection }
+    val deletableItems = rememberDeletableItems(graph, selectedTasks)
+    var confirming by remember { mutableStateOf<SelectionConfirm?>(null) }
+    confirming?.let { pending ->
+        val dismiss = { confirming = null }
+        val finish = { gone: Set<String> ->
+            confirming = null
+            multiSelection.endRemoving(gone)
+        }
+        when (pending) {
+            is SelectionConfirm.Remove -> RemoveSelectedDialog(pending.taskIds.size, onDismiss = dismiss) {
+                pending.taskIds.forEach(service::remove)
+                finish(pending.taskIds.toSet())
+            }
+            is SelectionConfirm.Cancel -> CancelSelectedDialog(pending.taskIds.size, onDismiss = dismiss) {
+                // Re-read the states: a task that finished or failed while the dialog was up keeps its result.
+                val cancelable = visible.filter { it.id in pending.taskIds && it.state.isCancelable }.map { it.id }
+                cancelable.forEach(service::cancel)
+                finish(cancelable.toSet())
+            }
+            is SelectionConfirm.Delete -> DeleteSelectedFilesDialog(
+                graph,
+                pending.targets,
+                fallbackCode = "E70082",
+                log = { taskId -> graph.logger?.fork("downloads", mapOf("taskId" to taskId)) },
+                afterDelete = service::remove,
+                onDismiss = dismiss,
+                onDone = { finish(pending.targets.keys) },
+            )
+        }
+    }
+    ReplaceAppBar(enabled = selecting) {
+        val pausable = selectedTasks.filter { it.state.isActive }
+        val resumable = selectedTasks.filter { it.state == DownloadState.PAUSED }
+        val retryable = selectedTasks.filter {
+            it.state == DownloadState.FAILED && retryRoute(it, canPickFolder, signIn) == RetryRoute.Direct
+        }
+        val cancelable = selectedTasks.filter { it.state.isCancelable }
+        DownloadSelectionBar(
+            count = selection.size,
+            allSelected = multiSelection.allSelected(shownIds),
+            onClose = endSelection,
+            onToggleSelectAll = { multiSelection.toggleAll(shownIds) },
+            onPause = if (pausable.isEmpty()) {
+                null
+            } else {
+                {
+                    pausable.forEach { service.pause(it.id) }
+                    endSelection()
+                }
+            },
+            onResume = if (resumable.isEmpty() && retryable.isEmpty()) {
+                null
+            } else {
+                {
+                    resumable.forEach { service.resume(it.id) }
+                    retryable.forEach { service.retry(it.id) }
+                    endSelection()
+                }
+            },
+            onCancel = if (cancelable.isEmpty()) null else ({ confirming = SelectionConfirm.Cancel(cancelable.map { it.id }) }),
+            onRemove = { confirming = SelectionConfirm.Remove(selectedTasks.map { it.id }) },
+            onDelete = if (deletableItems.isEmpty()) null else ({ confirming = SelectionConfirm.Delete(deletableItems) }),
+        )
+    }
 
     Box(Modifier.fillMaxSize()) {
         LazyVerticalGrid(
             state = gridState,
-            columns = GridCells.Adaptive(DownloadCardMinWidth),
-            modifier = Modifier.fillMaxSize(),
+            columns = railStableAdaptive(DownloadCardMinWidth),
+            modifier = Modifier.fillMaxSize().itemList(),
             contentPadding = PaddingValues(
                 start = DesignSpacing.MarginCompact,
                 end = DesignSpacing.MarginCompact,
@@ -214,32 +352,39 @@ fun DownloadsScreen(graph: AppGraph, coordinator: PlaybackCoordinator) {
                         LibraryChip(
                             if (entry == DownloadFilter.ALL) label else "$label ${visible.count { entry.matches(it.state) }}",
                             selected = entry == filter,
-                        ) { filter = entry }
+                        ) {
+                            filter = entry
+                            multiSelection.forgetSelectAll()
+                        }
                     }
                 }
             }
-            items(shown, key = { it.id }) { task ->
+            itemsIndexed(shown, key = { _, task -> task.id }) { index, task ->
                 DownloadCard(
                     task, service,
-                    modifier = Modifier.animateItem(),
-                    onRetry = {
-                        val playability = playabilityOf(task.errorCode)
-                        when {
-                            // The folder lost its write grant: only a fresh pick restores it, so Retry re-picks first.
-                            task.errorCode == DownloadFolderAccessException.CODE && graph.libraryFolderPicker != null ->
-                                scope.launch { if (pickDownloadFolder(graph, snackbar, scans)) service.retry(task.id) }
-                            // Signed out only: once signed in, the stored verdict may predate the sign-in, so it re-runs.
-                            playability == Playability.SignInRequired && signIn != null && !signIn.signedIn ->
-                                retryBlock = RetryBlock(task.id, playability)
-                            playability == Playability.Unavailable -> retryBlock = RetryBlock(task.id, playability)
-                            else -> service.retry(task.id)
+                    // Heights are read in the layout phase: a row-mate's height change relayouts, never recomposes.
+                    modifier = Modifier.animateItem().layout { measurable, constraints ->
+                        val rowMinHeight = if (columns > 1) {
+                            val rowStart = index / columns * columns
+                            val rowEnd = minOf(rowStart + columns, shown.size)
+                            (rowStart until rowEnd).maxOf { naturalHeights[shown[it].id] ?: 0 }
+                        } else {
+                            0
                         }
+                        val placeable = measurable.measure(
+                            constraints.copy(minHeight = rowMinHeight.coerceIn(constraints.minHeight, constraints.maxHeight)),
+                        )
+                        layout(placeable.width, placeable.height) { placeable.place(0, 0) }
                     },
-                    onPlay = {
-                        task.fileUri?.let { uri ->
-                            scope.launch { coordinator.playDownloaded(uri, task.videoId, task.title, task.artist) }
-                        }
-                    },
+                    onNaturalHeight = { height -> if (naturalHeights[task.id] != height) naturalHeights[task.id] = height },
+                    selecting = selecting,
+                    selected = task.id in selection,
+                    onToggleSelected = { multiSelection.toggle(task.id) },
+                    onStartSelection = { multiSelection.startKeepingFocus(task.id, keyboardMode) },
+                    requestFocus = multiSelection.focusTarget == task.id,
+                    onFocusRequested = multiSelection::focusHandled,
+                    onRetry = { retry(task) },
+                    onPlay = { scope.launch { coordinator.playDownloads(shown, task.id) } },
                     onRevealLibrary = if (store != null) ({
                         scope.launch {
                             // Resolve the folder from the file itself, not the current download-location
@@ -270,12 +415,13 @@ fun DownloadsScreen(graph: AppGraph, coordinator: PlaybackCoordinator) {
             }
         }
 
-        if (running || paused) {
+        if ((running || paused) && !selecting) {
             ExtendedFloatingActionButton(
                 onClick = { if (running) service.pauseAll() else service.resumeAll() },
                 text = { Text(stringResource(if (running) Res.string.downloads_pause_all else Res.string.downloads_resume_all)) },
                 icon = { Icon(if (running) Icons.Filled.Pause else Icons.Filled.PlayArrow, null) },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = LocalMiniPlayerInset.current).padding(DesignSpacing.Space16),
+                modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = LocalMiniPlayerInset.current).padding(DesignSpacing.Space16)
+                    .focusRing(FloatingActionButtonDefaults.extendedFabShape),
             )
         }
     }
@@ -283,6 +429,131 @@ fun DownloadsScreen(graph: AppGraph, coordinator: PlaybackCoordinator) {
 
 /** A Retry that a playability [verdict] answers before any re-run: its resolve dialog is up. */
 private class RetryBlock(val taskId: String, val verdict: Playability)
+
+/** How a failed task's Retry runs: straight to [DownloadService.retry], or behind what its failure needs first. */
+private sealed interface RetryRoute {
+    data object Direct : RetryRoute
+    data object RepickFolder : RetryRoute
+    class Prompt(val verdict: Playability) : RetryRoute
+}
+
+private fun retryRoute(task: DownloadTask, canPickFolder: Boolean, signIn: SignInResolver?): RetryRoute {
+    val playability = playabilityOf(task.errorCode)
+    return when {
+        // The folder lost its write grant: only a fresh pick restores it, so Retry re-picks first.
+        task.errorCode == DownloadFolderAccessException.CODE && canPickFolder -> RetryRoute.RepickFolder
+        // Signed out only: once signed in, the stored verdict may predate the sign-in, so it re-runs.
+        playability == Playability.SignInRequired && signIn != null && !signIn.signedIn -> RetryRoute.Prompt(playability)
+        playability == Playability.Unavailable -> RetryRoute.Prompt(playability)
+        else -> RetryRoute.Direct
+    }
+}
+
+/** A selection action waiting on its confirm dialog, over the tasks it was opened for. */
+private sealed interface SelectionConfirm {
+    class Remove(val taskIds: List<String>) : SelectionConfirm
+    class Cancel(val taskIds: List<String>) : SelectionConfirm
+    class Delete(val targets: Map<String, MediaStoreItem>) : SelectionConfirm
+}
+
+/** The selection mode's app bar: close · "N selected" · select all · pause · resume · cancel · ⋮ (remove, delete). */
+@Composable
+private fun DownloadSelectionBar(
+    count: Int,
+    allSelected: Boolean,
+    onClose: () -> Unit,
+    onToggleSelectAll: () -> Unit,
+    onPause: (() -> Unit)?,
+    onResume: (() -> Unit)?,
+    onCancel: (() -> Unit)?,
+    onRemove: () -> Unit,
+    onDelete: (() -> Unit)?,
+) {
+    val removeLabel = stringResource(Res.string.menu_remove_folder)
+    val deleteLabel = stringResource(Res.string.menu_remove_from_disk)
+    SelectionBar(count, allSelected, onClose, onToggleSelectAll) {
+        onPause?.let { ActionIcon(Icons.Filled.Pause, stringResource(Res.string.downloads_action_pause), onClick = it) }
+        onResume?.let { ActionIcon(Icons.Filled.PlayArrow, stringResource(Res.string.downloads_action_resume), onClick = it) }
+        onCancel?.let { ActionIcon(Icons.Filled.Cancel, stringResource(Res.string.downloads_cancel_selected), onClick = it) }
+        MoreMenu(ItemActions(listOfNotNull(removeLabel to onRemove, onDelete?.let { deleteLabel to it })), inFocusableItem = false)
+    }
+}
+
+/** The Library rows of the selected completed downloads, by task id: the ones Delete from storage can delete. */
+@Composable
+private fun rememberDeletableItems(graph: AppGraph, selectedTasks: List<DownloadTask>): Map<String, MediaStoreItem> {
+    val store = graph.mediaStore
+    val canDelete = LocalSongActions.current?.canDelete == true
+    val candidates = selectedTasks.mapNotNull { task ->
+        task.fileUri?.takeIf { task.state == DownloadState.COMPLETED }?.let { task.id to it }
+    }
+    val deletable by produceState(emptyMap<String, MediaStoreItem>(), store, canDelete, candidates) {
+        if (store == null || !canDelete || candidates.isEmpty()) {
+            value = emptyMap()
+            return@produceState
+        }
+        store.itemsChanges().onStart { emit(Unit) }.conflate().collect {
+            value = buildMap {
+                for ((taskId, fileUri) in candidates) {
+                    try {
+                        store.findItemByUri(Uri.parse(fileUri))?.let { put(taskId, it) }
+                    } catch (cancel: CancellationException) {
+                        throw cancel
+                    } catch (failure: Throwable) {
+                        graph.logger?.fork("downloads", mapOf("taskId" to taskId))
+                            ?.log(Logger.Level.WARN, "library lookup failed", failure)
+                    }
+                }
+            }
+        }
+    }
+    return deletable
+}
+
+@Composable
+private fun RemoveSelectedDialog(count: Int, onDismiss: () -> Unit, onConfirm: () -> Unit) {
+    ElevatedBarDialog(
+        title = pluralText(Res.plurals.downloads_remove_selected_title, count, count),
+        onDismiss = onDismiss,
+        canScrollBackward = false,
+        canScrollForward = false,
+        buttons = {
+            DialogSecondaryButton(stringResource(Res.string.dialog_cancel), onClick = onDismiss)
+            TextButton(onClick = onConfirm) { Text(stringResource(Res.string.menu_remove)) }
+        },
+    ) {
+        Text(
+            stringResource(Res.string.downloads_remove_selected_message),
+            style = MaterialTheme.typography.bodyMedium,
+            color = DesignColors.Ink,
+            modifier = Modifier.padding(horizontal = DesignSpacing.Space24, vertical = DesignSpacing.Space16),
+        )
+    }
+}
+
+@Composable
+private fun CancelSelectedDialog(count: Int, onDismiss: () -> Unit, onConfirm: () -> Unit) {
+    ElevatedBarDialog(
+        title = pluralText(Res.plurals.downloads_cancel_selected_title, count, count),
+        onDismiss = onDismiss,
+        canScrollBackward = false,
+        canScrollForward = false,
+        buttons = {
+            DialogSecondaryButton(stringResource(Res.string.downloads_cancel_selected_keep), onClick = onDismiss)
+            TextButton(onClick = onConfirm) { Text(stringResource(Res.string.downloads_cancel_selected)) }
+        },
+    ) {
+        Text(
+            stringResource(Res.string.downloads_cancel_selected_message),
+            style = MaterialTheme.typography.bodyMedium,
+            color = DesignColors.Ink,
+            modifier = Modifier.padding(horizontal = DesignSpacing.Space24, vertical = DesignSpacing.Space16),
+        )
+    }
+}
+
+/** The states a card's ⋮ offers Cancel in. */
+private val DownloadState.isCancelable: Boolean get() = isActive || this == DownloadState.PAUSED
 
 /** The filter chips, in display order. CANCELED matches none (it's filtered out of the screen). */
 private enum class DownloadFilter(val label: StringResource, val empty: StringResource) {
@@ -312,6 +583,13 @@ private fun DownloadCard(
     task: DownloadTask,
     service: DownloadService,
     modifier: Modifier,
+    onNaturalHeight: (Int) -> Unit,
+    selecting: Boolean,
+    selected: Boolean,
+    onToggleSelected: () -> Unit,
+    onStartSelection: () -> Unit,
+    requestFocus: Boolean,
+    onFocusRequested: () -> Unit,
     onRetry: () -> Unit,
     onPlay: () -> Unit,
     onRevealLibrary: (() -> Unit)?,
@@ -321,14 +599,33 @@ private fun DownloadCard(
 ) {
     val c = downloadColors()
     val failed = task.state == DownloadState.FAILED
+    val selectLabel = stringResource(Res.string.downloads_action_select)
+    val selectionGesture = Modifier.multiSelectGesture(
+        selecting = selecting,
+        selected = selected,
+        shape = RoundedCornerShape(MediaCardCorner),
+        requestFocus = requestFocus,
+        onFocusRequested = onFocusRequested,
+        onToggle = onToggleSelected,
+        onStartSelection = onStartSelection,
+    )
     Surface(
         shape = RoundedCornerShape(MediaCardCorner),
-        color = if (failed) c.dangerSoft else c.surface,
+        color = (if (failed) c.dangerSoft else c.surface).let { base -> if (selected) selectedItemFill().compositeOver(base) else base },
         border = BorderStroke(1.dp, if (failed) c.danger.copy(alpha = 0.4f) else c.border),
         modifier = modifier.fillMaxWidth(),
     ) {
-        Column(Modifier.padding(CardPadding), verticalArrangement = Arrangement.spacedBy(DesignSpacing.Space8)) {
-            Row(Modifier.semantics(mergeDescendants = true) {}, horizontalArrangement = Arrangement.spacedBy(CardGap)) {
+        // wrapContentHeight drops the row's min height, so the reported height is the content's own; the gesture
+        // before it still spans the stretched card.
+        Column(
+            selectionGesture.wrapContentHeight(Alignment.Top).onSizeChanged { onNaturalHeight(it.height) }.padding(CardPadding),
+            verticalArrangement = Arrangement.spacedBy(DesignSpacing.Space8),
+        ) {
+            // While selecting, the card's toggle merges the whole card into one checkbox stop instead.
+            val rowSemantics = Modifier.semantics(mergeDescendants = !selecting) {
+                if (!selecting) onLongClick(selectLabel) { onStartSelection(); true }
+            }
+            Row(rowSemantics, horizontalArrangement = Arrangement.spacedBy(CardGap)) {
                 LibraryThumb(icon = Icons.Outlined.FileDownload, badge = null, artUrl = task.thumbnailUrl, corner = MediaCardCorner)
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(DesignSpacing.Space4)) {
                     Text(
@@ -345,7 +642,11 @@ private fun DownloadCard(
                         }
                     }
                 }
-                MoreMenu(actionsFor(task, service, onRetry, onPlay, onRevealLibrary, onRevealFolder, fileActions, onOtherFormat))
+                if (selecting) {
+                    SelectionCheck(selected)
+                } else {
+                    MoreMenu(actionsFor(task, service, onRetry, onPlay, onRevealLibrary, onRevealFolder, fileActions, onOtherFormat, onStartSelection))
+                }
             }
             if (task.showsBar()) {
                 Box(Modifier.fillMaxWidth().padding(start = ContentIndent).a11ySilent()) { DownloadBar(task, c) }
@@ -375,12 +676,16 @@ private fun DownloadCard(
                         }
                         DownloadState.FAILED -> {
                             Text(downloadErrorText(task), style = MaterialTheme.typography.bodySmall, color = c.danger, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                            Button(
-                                onClick = onRetry,
-                                shape = RoundedCornerShape(percent = 50),
-                                colors = ButtonDefaults.buttonColors(containerColor = c.accent, contentColor = c.onAccent),
-                                contentPadding = PaddingValues(horizontal = DesignSpacing.Space16, vertical = DesignSpacing.Space4),
-                            ) { Text(stringResource(Res.string.retry), style = MaterialTheme.typography.labelMedium) }
+                            if (!selecting) {
+                                Button(
+                                    onClick = onRetry,
+                                    // Retry is on the card's ⋮ too: Tab moves card to card. A remote enters the card for it.
+                                    modifier = Modifier.focusProperties { canFocus = platformIsTelevision }.tvExitSideways(),
+                                    shape = RoundedCornerShape(percent = 50),
+                                    colors = ButtonDefaults.buttonColors(containerColor = c.accent, contentColor = c.onAccent),
+                                    contentPadding = PaddingValues(horizontal = DesignSpacing.Space16, vertical = DesignSpacing.Space4),
+                                ) { Text(stringResource(Res.string.retry), style = MaterialTheme.typography.labelMedium) }
+                            }
                         }
                         else -> {}
                     }
@@ -415,6 +720,8 @@ private fun downloadErrorUiText(task: DownloadTask): UiText {
 private fun DownloadTask.showsBar(): Boolean = state == DownloadState.PREPARING ||
     ((state == DownloadState.DOWNLOADING || state == DownloadState.PROCESSING || state == DownloadState.PAUSED) && progress != null)
 
+private val LIBRARY_REGISTER_WAIT = 30.seconds
+
 /** A download's file and link actions, each null when it doesn't apply (no Library row, no rename hook…). */
 private class CompletedFileActions(
     val addToPlaylist: (() -> Unit)?,
@@ -427,8 +734,26 @@ private class CompletedFileActions(
 private fun completedFileActions(graph: AppGraph, task: DownloadTask, service: DownloadService, onRename: () -> Unit): CompletedFileActions {
     val store = graph.mediaStore
     val songActions = LocalSongActions.current
+    // The service registers the file in the Library only after the task turns COMPLETED; a file outside
+    // every Library folder never shows up, so the wait is bounded.
     val libraryItem by produceState<MediaStoreItem?>(null, store, task.state, task.fileUri) {
-        value = if (store != null && task.state == DownloadState.COMPLETED) libraryItemOf(store, task) else null
+        if (store == null || task.state != DownloadState.COMPLETED) {
+            value = null
+            return@produceState
+        }
+        value = withTimeoutOrNull(LIBRARY_REGISTER_WAIT) {
+            store.itemsChanges().onStart { emit(Unit) }.conflate().mapNotNull {
+                try {
+                    libraryItemOf(store, task)
+                } catch (cancel: CancellationException) {
+                    throw cancel
+                } catch (failure: Throwable) {
+                    graph.logger?.fork("downloads", mapOf("taskId" to task.id))
+                        ?.log(Logger.Level.WARN, "library lookup failed", failure)
+                    null
+                }
+            }.first()
+        }
     }
     val item = libraryItem
     val fileUri = task.fileUri
@@ -574,8 +899,10 @@ private fun actionsFor(
     onRevealFolder: (() -> Unit)?,
     fileActions: CompletedFileActions,
     onOtherFormat: (() -> Unit)?,
+    onSelect: () -> Unit,
 ): ItemActions {
     val otherFormat = stringResource(Res.string.download_other_format)
+    val select = stringResource(Res.string.downloads_action_select)
     val entries = buildList<Pair<String, () -> Unit>> {
         when (task.state) {
             DownloadState.QUEUED, DownloadState.PREPARING, DownloadState.DOWNLOADING, DownloadState.PROCESSING -> {
@@ -610,6 +937,7 @@ private fun actionsFor(
                 add(stringResource(Res.string.menu_remove) to { service.remove(task.id) })
             }
         }
+        add(select to onSelect)
     }
     return ItemActions(entries)
 }

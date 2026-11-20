@@ -199,6 +199,11 @@
     <string name="menu_remove_from_playlist">Verwyder uit snitlys</string>
     <string name="playlist_delete_title">Skrap snitlys?</string>
     <string name="playlist_delete_message">“%1$s” sal verwyder word. Die liedjies bly in jou biblioteek.</string>
+    <plurals name="playlist_remove_selected_title">
+        <item quantity="one">Verwyder %1$d liedjie uit snitlys?</item>
+        <item quantity="other">Verwyder %1$d liedjies uit snitlys?</item>
+    </plurals>
+    <string name="playlist_remove_selected_message">Die liedjies bly in jou biblioteek.</string>
     <string name="add_to_playlist_new">Nuwe snitlys…</string>
     <string name="playlist_recent_play">Onlangs gespeel</string>
     <string name="playlist_top_tracks">Topsnitte</string>
@@ -291,6 +296,10 @@
     <string name="cd_search">Soek</string>
     <string name="cd_back">Terug</string>
     <string name="cd_clear">Vee uit</string>
+    <string name="cd_voice_search">Soek met stem</string>
+    <string name="voice_search_press_ok">Druk OK om met stem te soek</string>
+    <string name="voice_search_listening">Luister tans…</string>
+    <string name="voice_search_missed">Kon dit nie hoor nie. Druk OK om weer te probeer</string>
     <string name="cd_close">Maak toe</string>
     <string name="cd_more">Meer</string>
     <string name="cd_collapse">Vou in</string>
@@ -300,10 +309,14 @@
     <string name="cd_download">Laai af</string>
     <string name="cd_fullscreen">Volskerm</string>
     <string name="cd_exit_fullscreen">Verlaat volskerm</string>
+    <string name="cd_show_queue">Wys tou</string>
+    <string name="cd_hide_queue">Versteek tou</string>
     <string name="cd_fit_video">Pas video</string>
     <string name="cd_fill_video">Vul skerm</string>
-    <string name="cd_lock_rotation">Sluit rotasie</string>
-    <string name="cd_unlock_rotation">Ontsluit rotasie</string>
+    <string name="cd_screen_rotation">Skermrotasie</string>
+    <string name="rotation_lock_landscape">Sluit landskap</string>
+    <string name="rotation_lock_portrait">Sluit portret</string>
+    <string name="rotation_free">Vrye rotasie</string>
     <string name="cd_rewind10">Spoel 10 sekondes terug</string>
     <string name="cd_forward10">Spoel 10 sekondes vorentoe</string>
     <string name="cd_repeat_off">Herhaal: af</string>
@@ -412,6 +425,8 @@
     <string name="settings_audio_focus_apps">Onderbreek wanneer ander programme klank speel</string>
     <string name="settings_sponsor_block">SponsorBlock</string>
     <string name="settings_sponsor_block_hint">Slaan geborgde gedeeltes in YouTube-video's outomaties oor. Skakel dit vir 'n video af vanuit Speel nou.</string>
+    <string name="settings_stable_volume">Stabiele volume</string>
+    <string name="settings_stable_volume_hint">Maak harde en sagte dele gelyker en speel elke liedjie teen ’n soortgelyke luidheid.</string>
     <string name="sponsor_block_included">SponsorBlock geaktiveer vir hierdie video</string>
     <string name="sponsor_block_excluded">SponsorBlock gedeaktiveer vir hierdie video</string>
     <string name="settings_sound">Klank</string>
@@ -530,6 +545,13 @@
     <string name="dialog_ok">OK</string>
     <string name="folder_picker_disabled">Die stelsel se Lêers-app is afgeskakel. Skakel dit aan om ’n vouer te kies.</string>
     <string name="folder_picker_open_settings">Maak instellings oop</string>
+    <string name="folder_picker_title">Kies ’n musiekvouer</string>
+    <string name="folder_picker_use_folder">Gebruik hierdie vouer</string>
+    <string name="folder_picker_empty">Geen vouers hier nie</string>
+    <string name="folder_picker_storage_denied">Gee in instellings toegang tot jou musieklêers om ’n vouer te kies.</string>
+    <string name="folder_picker_companion_message">Hierdie toestel het geen vouerkieser nie. Laai YMusic Files, ’n klein hulpprogram vir YMusic, van hierdie skakel af en installeer dit om vouers te kies, en probeer dan weer.</string>
+    <string name="folder_picker_companion_update">YMusic Files moet opgedateer word om met hierdie weergawe van YMusic te werk. Laai die nuutste weergawe van hierdie skakel af, installeer dit en probeer dan weer.</string>
+    <string name="folder_picker_companion_open">Maak skakel oop</string>
     <string name="folder_picker_missing">Hierdie toestel het nie ’n vouerkieser nie, so ’n vouer kan nie gekies word nie.</string>
     <string name="error_supervised_account">Hierdie Google-rekening word onder toesig gebruik, so YouTube kan nie hier gebruik word nie. Meld af of skakel oor na 'n ander rekening.</string>
     <string name="settings_player_cache">Spelerkas</string>
@@ -642,4 +664,37 @@
     <string name="download_quality_medium">Medium</string>
     <string name="download_quality_best">Beste</string>
     <string name="download_kbps">%1$d kbps</string>
+
+    <!-- Windows refused a native library (desktop) -->
+    <string name="native_blocked">Windows het 'n deel van YMusic geblokkeer.</string>
+    <string name="media_engine_unavailable">Musiek en video's kan nie hier speel nie, maar jy kan steeds blaai en soek.</string>
+    <string name="native_blocked_help">Op 'n werk- of skoolrekenaar, vra jou administrateur om YMusic toe te laat. Op jou eie rekenaar, gaan Smart App Control in Windows Security na.</string>
+    <!-- A feed reloading in place (desktop) -->
+    <string name="a11y_refreshing">Verfris tans</string>
+    <string name="a11y_loading">Laai tans</string>
+    <!-- Download manager multi-select -->
+    <string name="select_all">Kies alles</string>
+    <string name="downloads_action_select">Kies</string>
+    <plurals name="downloads_selected_count">
+        <item quantity="one">%1$d gekies</item>
+        <item quantity="other">%1$d gekies</item>
+    </plurals>
+    <plurals name="downloads_remove_selected_title">
+        <item quantity="one">Verwyder %1$d aflaai van die lys?</item>
+        <item quantity="other">Verwyder %1$d aflaaie van die lys?</item>
+    </plurals>
+    <string name="downloads_remove_selected_message">Voltooide lêers bly op hierdie toestel.</string>
+    <plurals name="downloads_delete_selected_title">
+        <item quantity="one">Skrap %1$d lêer?</item>
+        <item quantity="other">Skrap %1$d lêers?</item>
+    </plurals>
+    <string name="downloads_delete_selected_message">Geskrapte lêers kan nie herstel word nie.</string>
+    <string name="downloads_cancel_selected">Kanselleer aflaaie</string>
+    <plurals name="downloads_cancel_selected_title">
+        <item quantity="one">Kanselleer %1$d aflaai?</item>
+        <item quantity="other">Kanselleer %1$d aflaaie?</item>
+    </plurals>
+    <string name="downloads_cancel_selected_message">Wat tot dusver afgelaai is, word geskrap.</string>
+    <string name="downloads_cancel_selected_keep">Hou</string>
+    <string name="data_dir_unusable">YMusic kan nie sy datavouer, %1$s, oopmaak nie. Maak seker dit is 'n vouer waarin jy kan skryf, en maak YMusic dan weer oop. (%2$s)</string>
 </resources>

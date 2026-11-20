@@ -190,6 +190,9 @@ class AppGraph(
      * Null hides Settings → Link devices together with [exportSessionCookies].
      */
     val scanQrCode: (suspend () -> String?)? = null,
+    /** Listens for one spoken query (see [SpeechEvent]); canceling the collection stops listening.
+     *  Null hides the search field's mic. */
+    val speechToText: (() -> kotlinx.coroutines.flow.Flow<SpeechEvent>)? = null,
     /**
      * OS PIN / biometric / passcode prompt. True if the user unlocked, false if they canceled.
      * Throws with message `no-lock` when the phone has no screen lock. Null hides Settings →
@@ -296,6 +299,19 @@ class AppGraph(
     /** Library scans, one per process so a scan outlives the screen and the activity that started it. */
     internal val scans by lazy { ScanController(processScope, logger?.fork("library-scan")) }
 
+    /**
+     * Applies a folder pick whose caller is gone: Android killed the process (or the screen) while the picker
+     * covered it, then delivered the picked [uri] to a fresh one. [asDownloadLocation] makes it the download
+     * location (the shell has registered its bucket already); either way the folder is then scanned.
+     */
+    fun adoptPickedFolder(uri: String, asDownloadLocation: Boolean) {
+        processScope.launch {
+            if (asDownloadLocation && !assignDownloadFolder(this@AppGraph, uri, scans::notify)) return@launch
+            val rescan = rescanLibrary ?: return@launch
+            scans.start { onProgress -> rescan(uri, onProgress) }
+        }
+    }
+
     private val appliedUiLanguage = MutableStateFlow(uiLanguageTag(settings).also(::applyUiLocale))
 
     /** The UI language in effect; the composition rebuilds on it (the platform locale is not snapshot state). */
@@ -308,13 +324,25 @@ class AppGraph(
         // Settings reach the player, cache and locale here, not in App: the process also runs without the UI
         // (Android Auto, media buttons, the playback service).
         val bindings = processScope
+        restoreUiLocale = { noRules, alreadyRestored ->
+            val log = logger?.fork("ui-locale")
+            if (alreadyRestored) {
+                log?.log(Logger.Level.WARN, "plural rules still missing after restoring the app language", noRules)
+            } else {
+                log?.log(Logger.Level.WARN, "platform locale has no plural rules", noRules)
+                reapplyUiLanguage()
+            }
+        }
         bindings.launch {
             settings.flow(AppSettings.uiLanguage).map { uiLanguageTag(settings) }.distinctUntilChanged().collect { tag ->
                 applyUiLocale(tag)
                 appliedUiLanguage.value = tag
             }
         }
+        bindings.launch { AppSettings.retiredKeys.forEach { settings.remove(it) } }
         bindPlayerConfig(bindings)
+        bindings.launch { pip.pictureHidden.collect { player.setVideoHidden(it) } }
+        bindings.launch { settings.flow(AppSettings.stableVolume).collect { player.setStableVolume(it) } }
         bindPlayerCacheLimit(bindings)
         SponsorBlockCoordinator(this, bindings)
         bindings.launch {
@@ -403,8 +431,8 @@ class AppGraph(
     /** Fullscreen only: stretch the picture to the hole. Mini / Now Playing always fit. */
     val videoFillScreen = mutableStateOf(false)
 
-    /** Fullscreen only: hold the current orientation regardless of the sensor and the system lock. */
-    val videoRotationLocked = mutableStateOf(false)
+    /** Fullscreen only: how the video follows the phone's rotation, regardless of the system lock. */
+    val videoRotation = mutableStateOf(VideoRotation.Free)
 
     val localeEpoch = MutableStateFlow(0)
 

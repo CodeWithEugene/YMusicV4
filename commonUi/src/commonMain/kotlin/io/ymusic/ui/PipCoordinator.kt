@@ -24,6 +24,10 @@ class PipCoordinator(
     /** True while AudioOnly is forced for background — not the user's choice, so never persisted. */
     val demotedToAudioOnly = MutableStateFlow(false)
 
+    /** No view shows the picture, so the player rests its video decoder (desktop: the player bar covers it). True until
+     *  the UI composes and whenever none is composed. */
+    val pictureHidden = MutableStateFlow(true)
+
     fun enablePip(): Boolean = settings.flow(AppSettings.enablePip).value
 
     fun playingVideo(): Boolean {
@@ -41,9 +45,15 @@ class PipCoordinator(
         return playingVideo()
     }
 
+    /** Paused too: a resume from the notification must not stream video nobody sees. */
     fun onLeaveWithoutPip() {
         if (inPip.value) return
-        if (playingVideo()) demoteToAudioOnly()
+        demoteToAudioOnly()
+    }
+
+    /** Desktop: the window is minimized or hidden, playing or not. [onEnterForeground] restores the quality. */
+    fun onWindowHidden() {
+        demoteToAudioOnly()
     }
 
     fun onPipStarted() {

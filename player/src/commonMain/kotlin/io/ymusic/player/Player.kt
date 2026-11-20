@@ -94,7 +94,8 @@ interface Player {
 
     fun clearQueue()
 
-    /** Jump to and load the queue item at [index]. */
+    /** Jump to and load the queue item at [index]. The current item is reloaded only when it failed
+     *  or ended; otherwise it plays on, resumes when paused, or keeps loading (a repeat tap). */
     fun playAt(index: Int)
 
     fun play()
@@ -135,6 +136,12 @@ interface Player {
     /** Audio-focus ducking: lowers what the engine plays without touching [volume] or [config]. */
     fun setDucked(ducked: Boolean)
 
+    /** Lowers playback further while voice input is listening, independent of [setDucked]. */
+    fun setVoiceDucked(ducked: Boolean)
+
+    /** No view shows the picture: the engine rests its video decoder without touching [config]'s quality. */
+    fun setVideoHidden(hidden: Boolean)
+
     /** Last applied playback speed. Write pushes [PlaybackConfig]; not a flow. */
     var speed: Float
 
@@ -150,6 +157,9 @@ interface Player {
 
     /** Sets [PlaybackConfig.inAppAudioFx]. */
     fun setInAppAudioFx(enabled: Boolean)
+
+    /** Sets [PlaybackConfig.stableVolume]. */
+    fun setStableVolume(enabled: Boolean)
 
     /** Sets [PlaybackConfig.audioOnly]. Quality is unchanged and restored when this is false. */
     fun setAudioOnly(audioOnly: Boolean)
@@ -184,7 +194,7 @@ interface Player {
 
     /**
      * [MediaEngine.reset] the active engine and reload the current item at the current position.
-     * Recovers a wedged player. No-op when nothing is loaded. Keeps the current play/pause intent.
+     * Recovers a wedged player, playing. No-op when nothing is loaded.
      */
     fun reload()
 
@@ -217,11 +227,13 @@ interface Player {
 /**
  * Lazy engine factories — an engine is only constructed when the queue first needs its item type.
  * [youtube] may be null on hosts without a YouTube engine; a [PlayableItem.YtMedia] then fails with
- * `E60050` through [Player.status] instead of crashing.
+ * `E60050` through [Player.status] instead of crashing. [unavailable] is for a host whose media
+ * backend failed to come up: no engine is built and every load publishes it.
  */
 class PlayerEngines(
     val local: () -> LocalPlayer,
     val youtube: (() -> YtEngine)? = null,
+    val unavailable: PlayerError? = null,
 )
 
 fun createPlayer(

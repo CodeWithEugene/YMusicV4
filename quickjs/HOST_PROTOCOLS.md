@@ -87,7 +87,7 @@ re-mints** (cause chain; the deepest code wins), so a user report is answered by
 Codes come in two kinds (AGENTS.md "Error Handling"):
 - **Categories** — the small shared vocabulary all tiers classify into, localized by the app:
   `network` (transport; retryable), `parse` (scraped shape not understood → ship new JS), `oom`
-  (engine gave out). Open set: an unknown category (newer remote JS/server than this app build)
+  (engine gave out), `disk_full` (a host store hit full device storage; minted host-side). Open set: an unknown category (newer remote JS/server than this app build)
   degrades to the generic message + code, never a crash.
 - **Site codes** — `E#####`, one hardcoded literal at one throw/classification site; grep is the
   registry. `E2xxxx` = `:dynamic-engine` incl. its remote JS, `E9xxxx` = server-minted. Reserved so
@@ -370,6 +370,28 @@ settings/set  JS→K: {"key":"…","type":"string|boolean|int","value":…}
 infers it from the value. Numbers must be integers. Missing/invalid fields RESET with `E20060`; a
 store failure RESETs with `E20061` (or preserves the store's own `CodedError`).
 
+There is no change stream: after the user changes a setting a bundle reads, the host fires the
+`"settings_changed"` event (§3.7) once the store holds the new value, and the bundle pulls what it
+needs again. player.js reads `playback.stableVolume` (boolean, default true) at `player/init` and
+on that event.
+
+---
+
+## 3.5.1 Remote config features (`command = "remote-config/get"`) — *implemented in `:dynamic-engine`*
+
+Read-only and live: every call answers from the config the app holds now, so a value can change
+between two reads. One-shot.
+
+```
+remote-config/get  JS→K: {"key":"…"}
+                   K→JS: {"value":…} then EOF; {} when the key is absent
+```
+
+It serves any key of the config's `features`, whether or not the app build declares a property for
+it. `RemoteConfig.get(key, defaultValue)` returns the default when the key is absent or null, or
+the read fails, including on hosts older than this command, which refuse the open. A failed read RESETs
+with `E20062`.
+
 ---
 
 ## 3.6 MSE player — native C host, not a pipe protocol
@@ -400,7 +422,8 @@ Opposite of the usual JS-opens direction (same as `listen/player/status`). C or 
 `MseJsEventBridge.fire(name)` / `DynamicEngine.fire(name)` (any thread). The runtime hops onto the
 engine dispatcher, opens `"event"`, writes the UTF-8 name, END. JS `ymix.onAccept("event")` reads
 to EOF and dispatches `ymix.onEvent(name)`. Player create wires
-`MseJsEventBridge.setJsEventBridge { engine.fire(it) }`. Native MSE uses the name `"mse_ended"`.
+`MseJsEventBridge.setJsEventBridge { engine.fire(it) }`. Native MSE uses the name `"mse_ended"`;
+the player host fires `"settings_changed"` (§3.5). A name no handler listens for is dropped.
 
 ---
 
@@ -619,6 +642,7 @@ whatever module wires the host handlers (the engine host, not the binding).
 | Cookies    | `cookie/get`, `cookie/set` | one-shot, EOF-framed | on `client.cookieJar`; get → name→value object, set → `Set-Cookie[]`, no body; `E20040`/`E20041` |
 | Cache      | `cache/get\|put\|delete\|list` | one-shot, **streamed** values | **scoped** keyed blob store; host-stamped size/updatedAt/lastUsed + custom `meta`; JS owns eviction (scopedCache + evictors); `E20050`/`E20051` |
 | Settings   | `settings/get`, `settings/set` | one-shot, EOF-framed | app's shared typed string/boolean/int store; `E20060`/`E20061` |
+| Remote config | `remote-config/get` | one-shot, EOF-framed | live read-only `features` values; `E20062` |
 | File I/O   | `file`   | **session**, length-framed     | open(path, r\|w\|a) — read-only *or* write-only → read/seek/size *or* write/flush → close; chunks stream |
 | FS meta    | `fs`     | one-shot, EOF-framed           | list/stat/delete/mkdir/rename/exists; list streams JSONL |
 | SQLite     | `sqlite` | **session**, length-framed     | open(name,version,migrations) → query/exec/begin/commit/close; rows stream JSONL |

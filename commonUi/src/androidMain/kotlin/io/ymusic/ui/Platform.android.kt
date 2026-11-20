@@ -1,35 +1,74 @@
 package io.ymusic.ui
 
 import android.app.Activity
+import android.app.UiModeManager
+import android.content.Context
 import android.content.ContextWrapper
 import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.os.Build
+import android.view.accessibility.AccessibilityManager
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.mandatorySystemGestures
+import androidx.compose.foundation.layout.navigationBarsIgnoringVisibility
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsIgnoringVisibility
 import androidx.compose.foundation.layout.systemGestures
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 
-internal actual val platformUsesTouch: Boolean = true
+internal actual val platformUsesTouch: Boolean get() = !AndroidInputMode.television
+
+internal actual val platformIsTelevision: Boolean get() = AndroidInputMode.television
+
+/** How the device is driven, recorded by the app shell before any UI composes. */
+object AndroidInputMode {
+    /** A TV is driven by a D-pad, whatever touchscreen it reports: the emulator image claims one. */
+    @Volatile
+    internal var television = false
+        private set
+
+    val isTelevision: Boolean get() = television
+
+    fun init(context: Context) {
+        val uiMode = context.getSystemService(UiModeManager::class.java)
+        television = uiMode?.currentModeType == Configuration.UI_MODE_TYPE_TELEVISION
+    }
+}
 
 internal actual val desktopLayoutHole: Boolean = false
+
+internal actual val contextMenuKey: Key = Key.Menu
+
+internal actual val KeyEvent.isKeyRepeat: Boolean get() = nativeKeyEvent.repeatCount > 0
+
+internal actual val KeyEvent.isLongPress: Boolean get() = nativeKeyEvent.isLongPress
 
 actual fun Modifier.a11yActionLabel(label: String?): Modifier =
     if (label.isNullOrEmpty()) this
@@ -49,6 +88,21 @@ internal actual fun PlatformBackHandler(enabled: Boolean, onBack: () -> Unit) {
 }
 
 @Composable
+internal actual fun rememberTouchExplorationEnabled(): Boolean {
+    val context = LocalContext.current
+    val manager = remember(context) { context.getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager }
+    var enabled by remember(manager) { mutableStateOf(manager?.isTouchExplorationEnabled == true) }
+    DisposableEffect(manager) {
+        if (manager == null) return@DisposableEffect onDispose {}
+        val listener = AccessibilityManager.TouchExplorationStateChangeListener { enabled = it }
+        manager.addTouchExplorationStateChangeListener(listener)
+        enabled = manager.isTouchExplorationEnabled
+        onDispose { manager.removeTouchExplorationStateChangeListener(listener) }
+    }
+    return enabled
+}
+
+@Composable
 internal actual fun SyncSystemBars(dark: Boolean) {
     val view = LocalView.current
     if (view.isInEditMode) return
@@ -63,7 +117,7 @@ internal actual fun SyncSystemBars(dark: Boolean) {
 }
 
 @Composable
-internal actual fun SyncSensorRotation(locked: Boolean) {
+internal actual fun SyncSensorRotation(rotation: VideoRotation) {
     val view = LocalView.current
     if (view.isInEditMode) return
     val activity = remember(view) {
@@ -73,11 +127,12 @@ internal actual fun SyncSensorRotation(locked: Boolean) {
         }
         ctx as? Activity
     }
-    // Toggling must not pass through UNSPECIFIED, or LOCKED could capture the system's orientation.
     SideEffect {
-        activity?.requestedOrientation =
-            if (locked) ActivityInfo.SCREEN_ORIENTATION_LOCKED
-            else ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+        activity?.requestedOrientation = when (rotation) {
+            VideoRotation.Free -> ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+            VideoRotation.Landscape -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            VideoRotation.Portrait -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+        }
     }
     DisposableEffect(activity) {
         onDispose {
@@ -86,7 +141,7 @@ internal actual fun SyncSensorRotation(locked: Boolean) {
     }
 }
 
-internal actual val rotationLockSupported: Boolean = true
+internal actual val rotationLockSupported: Boolean get() = !AndroidInputMode.television
 
 @Composable
 internal actual fun SyncImmersiveSystemBars(immersive: Boolean) {
@@ -122,7 +177,23 @@ internal actual fun KeepScreenOn(enabled: Boolean) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal actual fun Modifier.keepBelowStatusBar(): Modifier =
-    windowInsetsPadding(WindowInsets.statusBarsIgnoringVisibility)
+    windowInsetsPadding(WindowInsets.statusBarsIgnoringVisibility).padding(horizontal = fullscreenSideInset())
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal actual fun Modifier.fullscreenSidePadding(): Modifier = padding(horizontal = fullscreenSideInset())
+
+/** The wider of the two side insets, for both sides: a cutout or side nav bar on one edge keeps the chrome symmetric. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun fullscreenSideInset(): Dp {
+    val density = LocalDensity.current
+    val sides = WindowInsets.navigationBarsIgnoringVisibility
+        .union(WindowInsets.mandatorySystemGestures)
+        .union(WindowInsets.displayCutout)
+    val widestPx = maxOf(sides.getLeft(density, LayoutDirection.Ltr), sides.getRight(density, LayoutDirection.Ltr))
+    return with(density) { widestPx.toDp() }
+}
 
 // The system honours at most this much exclusion height per edge (config_systemGestureExclusionLimitDp).
 private val SystemGestureExclusionLimit = 200.dp

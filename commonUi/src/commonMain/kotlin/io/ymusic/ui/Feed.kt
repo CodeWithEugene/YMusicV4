@@ -41,7 +41,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
@@ -57,6 +56,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.ymusic.download.StillProcessingException
 import io.ymusic.dynamicengine.yt.YtChip
 import io.ymusic.dynamicengine.yt.YtFeedItem
@@ -76,6 +76,7 @@ import io.ymusic.ui.resources.error_playlist_backup_invalid
 import io.ymusic.ui.resources.error_playlist_backup_newer
 import io.ymusic.ui.resources.error_supervised_account
 import io.ymusic.ui.resources.feed_empty
+import io.ymusic.ui.resources.media_engine_unavailable
 import io.ymusic.ui.resources.menu_add_to_playlist
 import io.ymusic.ui.resources.menu_play_single
 import io.ymusic.ui.resources.menu_remove
@@ -108,7 +109,9 @@ import kotlinx.coroutines.withTimeout
 import org.jetbrains.compose.resources.getString
 import org.jetbrains.compose.resources.stringResource
 import projectcommon.error.DISK_FULL_CODE
+import projectcommon.error.PLAYBACK_UNAVAILABLE_CODE
 import projectcommon.error.errorCode
+import projectcommon.log.captureUnlessEnvironmental
 
 /** Paged feed loading over any yt page source (browse / search / watch-next continuations).
  *  [fetchTimeoutMs] is the watchdog for a wedged engine (seen live: Android CookieManager deadlocking
@@ -142,8 +145,10 @@ class Pager(
             val emptyMessage: String? = null,
             val continuation: String?,
             val loadingMore: Boolean,
-            /** Pull-to-refresh in flight: the list stays on screen, only the pull indicator spins. */
+            /** A keep-content [reload] in flight: the list stays on screen until the new page lands. */
             val refreshing: Boolean = false,
+            /** The chip whose page that reload fetches: the chip spins instead of the pull indicator. */
+            val reloadingChipToken: String? = null,
             /** Search surfaces only: the server's filter submenu (empty elsewhere). */
             val filterGroups: List<io.ymusic.dynamicengine.yt.YtFilterGroup> = emptyList(),
             /** Detail surfaces only (channel / playlist browse). */
@@ -189,7 +194,7 @@ class Pager(
             } catch (e: CancellationException) {
                 throw e // a newer refresh took over the state — this coroutine just dies
             } catch (e: Exception) {
-                logger?.captureError(e)
+                logger?.captureUnlessEnvironmental(e)
                 State.Failed(e.errorCode() ?: "E20032", e.message)
             }
         }
@@ -202,15 +207,17 @@ class Pager(
      *  null reloads the surface's default top-of-feed. */
     fun reload(chipToken: String? = null) {
         val source = reloadFetch ?: fetch
-        val current = _state.value as? State.Ready ?: return load(chipToken, source)
-        if (current.refreshing) return
+        val ready = _state.value as? State.Ready ?: return load(chipToken, source)
+        // Another chip takes over a chip reload; a pull, or the same chip again, waits for it.
+        if (ready.refreshing && (chipToken == null || chipToken == ready.reloadingChipToken)) return
+        val current = ready.copy(refreshing = false, reloadingChipToken = null)
         job?.cancel()
         val carryOver = chipToken != null
         val previousChips = if (carryOver) current.chips else emptyList()
         val previousSort = if (carryOver) current.sort else emptyList()
         val previousWrap = carryOver && current.chipsWrap
         val previousFilters = if (carryOver) current.filterGroups else emptyList()
-        _state.value = current.copy(refreshing = true)
+        _state.value = current.copy(refreshing = true, reloadingChipToken = chipToken)
         job = scope.launch {
             _state.value = try {
                 val page = withTimeout(fetchTimeoutMs) { source(chipToken) }
@@ -219,11 +226,11 @@ class Pager(
                 if (e !is TimeoutCancellationException) throw e
                 logger?.log(Logger.Level.WARN, "reload timed out after ${fetchTimeoutMs}ms", e)
                 _errors.tryEmit(TIMEOUT_CODE)
-                current.copy(refreshing = false)
+                current
             } catch (e: Exception) {
-                logger?.captureError(e)
+                logger?.captureUnlessEnvironmental(e)
                 _errors.tryEmit(e.errorCode() ?: "E20033")
-                current.copy(refreshing = false)
+                current
             }
         }
     }
@@ -291,7 +298,7 @@ class Pager(
                 logger?.log(Logger.Level.WARN, "loadMore timed out after ${fetchTimeoutMs}ms", e)
                 current.copy(loadingMore = false) // timed out — the tail button stays for a retry
             } catch (e: Exception) {
-                logger?.captureError(e)
+                logger?.captureUnlessEnvironmental(e)
                 // Keep what we have; the tail button stays for a retry.
                 current.copy(loadingMore = false)
             }
@@ -358,7 +365,7 @@ fun FeedList(
     listState: LazyListState? = null,
     onDeeplink: ((link: String, title: String?) -> Unit)? = null,
 ) {
-    val state by pager.state.collectAsState()
+    val state by pager.state.collectAsStateWithLifecycle()
     // Pull-to-refresh / F5 reloads the surface from the top: drop any chip filter and take the
     // server's default first response, keeping the current list on screen until the new page lands.
     val reload = { pager.reload() }
@@ -379,7 +386,7 @@ fun FeedList(
             errorCode = null
         }
     }
-    val refreshing = (state as? Pager.State.Ready)?.refreshing == true
+    val refreshing = (state as? Pager.State.Ready)?.let { it.refreshing && it.reloadingChipToken == null } == true
     PullToRefreshFeed(refreshing = refreshing, onRefresh = reload) {
         when (val s = state) {
             is Pager.State.Loading -> Column(modifier) {
@@ -426,8 +433,8 @@ class EmptyAction(val label: String, val onClick: () -> Unit)
 
 /** Touch platforms wrap the feed in Material's pull-to-refresh; desktop reloads via F5/Cmd+R
  *  instead (a mouse can't over-drag a list), so the wrapper is a no-op there. The indicator spins
- *  for any keep-content reload — a pull gesture or a chip tap — but not the first full-screen load
- *  (that state has no list to pull against and shows its own centered spinner). */
+ *  for a pull or F5 reload, not a chip tap (the chip spins) nor the first full-screen load (that
+ *  state has no list to pull against and shows its own centered spinner). */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PullToRefreshFeed(refreshing: Boolean, onRefresh: () -> Unit, content: @Composable () -> Unit) {
@@ -490,7 +497,7 @@ internal fun EmptyState(
                         Text(stringResource(Res.string.reload))
                     }
                 }
-                Button(onClick = onReload) { Text(actionLabel) }
+                Button(onClick = onReload, modifier = Modifier.focusRing(ButtonDefaults.shape)) { Text(actionLabel) }
             }
         }
     }
@@ -505,6 +512,7 @@ internal fun errorMessage(code: String): String = errorText(code).resolve()
 internal fun errorText(code: String): UiText = when (code) {
     "network" -> UiText.Resource(Res.string.error_network)
     DISK_FULL_CODE -> UiText.Resource(Res.string.error_disk_full)
+    PLAYBACK_UNAVAILABLE_CODE -> UiText.Resource(Res.string.media_engine_unavailable)
     StillProcessingException.CODE -> UiText.Resource(Res.string.error_live_still_processing)
     CAPTCHA_CODE -> UiText.Resource(Res.string.error_captcha)
     SUPERVISED_ACCOUNT_CODE -> UiText.Resource(Res.string.error_supervised_account)
@@ -537,7 +545,7 @@ internal fun ErrorState(code: String, modifier: Modifier = Modifier, onRetry: ()
             )
             val captcha = LocalCaptchaResolver.current?.takeIf { code == CAPTCHA_CODE }
             if (captcha == null) {
-                Button(onClick = onRetry, modifier = Modifier.padding(top = DesignSpacing.Space8)) {
+                Button(onClick = onRetry, modifier = Modifier.padding(top = DesignSpacing.Space8).focusRing(ButtonDefaults.shape)) {
                     Text(stringResource(Res.string.retry))
                 }
             } else {
@@ -552,7 +560,7 @@ internal fun ErrorState(code: String, modifier: Modifier = Modifier, onRetry: ()
                     ) {
                         Text(stringResource(Res.string.retry))
                     }
-                    Button(onClick = { captcha.resolve(onRetry) }) { Text(stringResource(captcha.label)) }
+                    Button(onClick = { captcha.resolve(onRetry) }, modifier = Modifier.focusRing(ButtonDefaults.shape)) { Text(stringResource(captcha.label)) }
                 }
             }
         }
@@ -573,16 +581,21 @@ private fun FeedSections(
 ) {
     // Collapsible sections start collapsed; the map survives recomposition, keyed by section slot.
     val expanded = remember { mutableStateMapOf<Int, Boolean>() }
+    val sectionFocus = remember { HashMap<Int, LoadMoreFocus>() }
+    val moreFocus = remember(pager) { LoadMoreFocus() }
+    val itemTotal = state.sections.sumOf { it.items.size }
+    moreFocus.Settle(loading = state.loadingMore, count = itemTotal, controlShown = state.continuation != null)
     BoxWithConstraints(modifier.fillMaxSize()) {
-        val metrics = gridMetricsFor(maxWidth)
-        val layout = feedLayoutFor(maxWidth)
-        val columns = if (layout != FeedLayout.Grid) 1 else gridColumnsFor(maxWidth)
+        val layoutWidth = railStableWidth(maxWidth)
+        val metrics = gridMetricsFor(layoutWidth)
+        val layout = feedLayoutFor(layoutWidth)
+        val columns = if (layout != FeedLayout.Grid) 1 else gridColumnsFor(layoutWidth)
         val wide = layout == FeedLayout.WideList
-        val compactTitle = feedCompactTitleFor(maxWidth)
+        val compactTitle = feedCompactTitleFor(layoutWidth)
         val listState = hoistedListState ?: rememberLazyListState()
         // Report scroll to the shell (which lifts the app bar); the feed doesn't touch the bar itself.
         TrackScroll { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0 }
-        LazyColumn(Modifier.fillMaxSize().listKeyboardNavigation(), state = listState, contentPadding = PaddingValues(bottom = LocalMiniPlayerInset.current)) {
+        LazyColumn(Modifier.fillMaxSize().listKeyboardNavigation(items = true), state = listState, contentPadding = PaddingValues(bottom = LocalMiniPlayerInset.current)) {
             if (topContent != null) item { topContent() }
             // A 0-height chip slot at index 0 makes firstVisibleItemIndex > 0 while still at the top.
             val hasChips = state.chips.isNotEmpty() || state.sort.isNotEmpty()
@@ -592,6 +605,7 @@ private fun FeedSections(
                 // mockups give the feed a small inset under the app bar (search.html .grid).
                 item { Spacer(Modifier.height(6.dp)) }
             }
+            var firstIndex = 0
             state.sections.forEachIndexed { index, section ->
                 if (index > 0) {
                     // The section separator: a hairline centered in the inter-section air (the
@@ -609,6 +623,10 @@ private fun FeedSections(
                 }
                 feedSection(
                     section = section,
+                    sectionIndex = index,
+                    firstIndex = firstIndex,
+                    moreFocus = moreFocus,
+                    sectionFocus = sectionFocus.getOrPut(index) { LoadMoreFocus() },
                     columns = columns,
                     metrics = metrics,
                     wide = wide,
@@ -620,15 +638,24 @@ private fun FeedSections(
                     onPlayItem = onPlayItem,
                     onDeeplink = onDeeplink,
                 )
+                firstIndex += section.items.size
             }
             if (state.continuation != null) {
                 item {
                     if (state.loadingMore) {
                         Box(Modifier.fillMaxWidth().padding(12.dp), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(Modifier.size(28.dp))
+                            LoadingMoreIndicator(moreFocus)
                         }
                     } else {
-                        ShowMoreButton(stringResource(Res.string.show_more), expanded = false, onClick = { pager.loadMore() })
+                        ShowMoreButton(
+                            stringResource(Res.string.show_more),
+                            expanded = false,
+                            modifier = moreFocus.control,
+                            onClick = {
+                                moreFocus.start(itemTotal)
+                                pager.loadMore()
+                            },
+                        )
                     }
                 }
             }
@@ -645,6 +672,10 @@ private val COLLAPSED_ROWS_BY_COLUMNS = listOf(4, 3, 2)
 
 private fun androidx.compose.foundation.lazy.LazyListScope.feedSection(
     section: YtSection,
+    sectionIndex: Int,
+    firstIndex: Int,
+    moreFocus: LoadMoreFocus,
+    sectionFocus: LoadMoreFocus,
     columns: Int,
     metrics: GridMetrics,
     wide: Boolean,
@@ -680,21 +711,16 @@ private fun androidx.compose.foundation.lazy.LazyListScope.feedSection(
     // "Show more" toggle — the header's chevron and the button below both expand it.
     if (section.layout == YtSection.LAYOUT_TAGS) {
         val shown = if (expanded || !section.collapsible) section.items else section.items.take(TAGS_COLLAPSED)
-        item { TagFlow(shown, onOpen) }
+        item { TagFlow(shown, onOpen) { i -> moreFocus.item(firstIndex + i).then(sectionFocus.item(i)) } }
         if (section.collapsible && section.items.size > TAGS_COLLAPSED) {
-            item {
-                val label = if (expanded) {
-                    stringResource(Res.string.show_less)
-                } else {
-                    stringResource(Res.string.show_more_n, section.items.size - TAGS_COLLAPSED)
-                }
-                ShowMoreButton(label, expanded = expanded, onClick = onToggle)
+            item(key = showMoreKey(sectionIndex)) {
+                SectionToggle(section, TAGS_COLLAPSED, expanded, sectionFocus, onToggle)
             }
         }
         return
     }
     if (section.layout == YtSection.LAYOUT_CAROUSEL) {
-        item { ChannelCarousel(section.items, onOpen) }
+        item { ChannelCarousel(section.items, onOpen) { i -> moreFocus.item(firstIndex + i) } }
         return
     }
     // A collapsed section keeps a few rows, resolved by column count from an engine-supplied
@@ -710,6 +736,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.feedSection(
                 item,
                 actions = itemActions(item, coordinator),
                 onClick = itemClick(item, section, coordinator, onOpen, onPlayItem),
+                modifier = moreFocus.item(firstIndex + i).then(sectionFocus.item(i)),
                 wide = wide,
                 compactTitle = compactTitle,
             )
@@ -731,12 +758,13 @@ private fun androidx.compose.foundation.lazy.LazyListScope.feedSection(
                     ),
                 horizontalArrangement = Arrangement.spacedBy(metrics.gutter - metrics.inset * 2),
             ) {
-                rows[r].forEach { item ->
+                rows[r].forEachIndexed { column, item ->
+                    val position = r * columns + column
                     FeedGridCard(
                         item,
                         actions = itemActions(item, coordinator),
                         onClick = itemClick(item, section, coordinator, onOpen, onPlayItem),
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier.weight(1f).then(moreFocus.item(firstIndex + position)).then(sectionFocus.item(position)),
                         inset = metrics.inset,
                     )
                 }
@@ -745,15 +773,34 @@ private fun androidx.compose.foundation.lazy.LazyListScope.feedSection(
         }
     }
     if (section.collapsible && section.items.size > collapsedCount) {
-        item {
-            val label = if (expanded) {
-                stringResource(Res.string.show_less)
-            } else {
-                stringResource(Res.string.show_more_n, section.items.size - collapsedCount)
-            }
-            ShowMoreButton(label, expanded = expanded, onClick = onToggle)
+        item(key = showMoreKey(sectionIndex)) {
+            SectionToggle(section, collapsedCount, expanded, sectionFocus, onToggle)
         }
     }
+}
+
+/** Keyed, so a focused toggle keeps its node (and focus) when the rows above it come and go. */
+private fun showMoreKey(sectionIndex: Int) = "show-more:$sectionIndex"
+
+/** A collapsible section's "Show more (N)" / "Show less": expanding focuses the first revealed item,
+ *  collapsing keeps focus on the toggle. */
+@Composable
+private fun SectionToggle(section: YtSection, collapsedCount: Int, expanded: Boolean, focus: LoadMoreFocus, onToggle: () -> Unit) {
+    val label = if (expanded) {
+        stringResource(Res.string.show_less)
+    } else {
+        stringResource(Res.string.show_more_n, section.items.size - collapsedCount)
+    }
+    ShowMoreButton(
+        label,
+        expanded = expanded,
+        modifier = focus.control,
+        onClick = {
+            if (expanded) focus.collapse() else focus.reveal(collapsedCount)
+            onToggle()
+        },
+    )
+    focus.Settle(loading = false, count = section.items.size, controlShown = true)
 }
 
 private fun itemClick(
@@ -786,7 +833,7 @@ internal val LocalRemoveFromTopTracks = compositionLocalOf<((YtFeedItem) -> Unit
 @Composable
 private fun itemActions(item: YtFeedItem, coordinator: PlaybackCoordinator): ItemActions {
     val downloadLauncher = LocalDownloadLauncher.current
-    val quickPreset = downloadLauncher?.quickPreset?.collectAsState()?.value
+    val quickPreset = downloadLauncher?.quickPreset?.collectAsStateWithLifecycle()?.value
     val removeFromTopTracks = LocalRemoveFromTopTracks.current
     val ytPlaylists = LocalYtPlaylistActions.current
     val removeFromYtPlaylist = LocalRemoveFromYtPlaylist.current
@@ -804,9 +851,6 @@ private fun itemActions(item: YtFeedItem, coordinator: PlaybackCoordinator): Ite
                 }
                 if (downloadLauncher != null && !item.live) {
                     add(stringResource(Res.string.cd_download) to { downloadLauncher.launch(item) })
-                    if (quickPreset != null) {
-                        add(stringResource(Res.string.quick_download_menu, quickPreset.label()) to { downloadLauncher.quickLaunch(item) })
-                    }
                 }
                 if (share != null) add(stringResource(Res.string.cd_share) to { share(item.kind, item.id) })
                 if (removeFromYtPlaylist != null && item.removeToken != null) {
@@ -814,6 +858,10 @@ private fun itemActions(item: YtFeedItem, coordinator: PlaybackCoordinator): Ite
                 }
                 if (removeFromTopTracks != null) {
                     add(stringResource(Res.string.menu_remove) to { removeFromTopTracks(item) })
+                }
+                // Kept last: quickest to reach with a screen reader (#340).
+                if (downloadLauncher != null && !item.live && quickPreset != null) {
+                    add(stringResource(Res.string.quick_download_menu, quickPreset.label()) to { downloadLauncher.quickLaunch(item) })
                 }
             }
         } else {
@@ -864,7 +912,7 @@ private fun rememberChannelSubscriber(coordinator: PlaybackCoordinator): ((chann
 @Composable
 private fun FeedChips(state: Pager.State.Ready, pager: Pager) {
     if (state.chips.isEmpty() && state.sort.isEmpty()) return
-    // Keep-content reload either way: the list stays put with the pull indicator spinning, so a
+    // Keep-content reload either way: the list stays put with the tapped chip spinning, so a
     // failed chip fetch keeps the current data (error → snackbar) instead of blanking the screen.
     if (state.chipsWrap) {
         androidx.compose.foundation.layout.FlowRow(
@@ -875,7 +923,7 @@ private fun FeedChips(state: Pager.State.Ready, pager: Pager) {
             verticalArrangement = Arrangement.spacedBy(DesignSpacing.Space8),
         ) {
             state.chips.forEach { chip ->
-                FeedChip(chip.title, selected = chip.selected) { pager.reload(chip.token) }
+                FeedChip(chip.title, selected = chip.selected, loading = chip.isReloading(state)) { pager.reload(chip.token) }
             }
             if (state.sort.isNotEmpty()) {
                 FeedSortMenu(state.sort) { token -> pager.reload(token) }
@@ -891,7 +939,7 @@ private fun FeedChips(state: Pager.State.Ready, pager: Pager) {
         horizontalArrangement = Arrangement.spacedBy(DesignSpacing.Space8),
     ) {
         items(state.chips) { chip ->
-            FeedChip(chip.title, selected = chip.selected) { pager.reload(chip.token) }
+            FeedChip(chip.title, selected = chip.selected, loading = chip.isReloading(state)) { pager.reload(chip.token) }
         }
         if (state.sort.isNotEmpty()) {
             item { FeedSortMenu(state.sort) { token -> pager.reload(token) } }
@@ -947,22 +995,31 @@ private fun FeedSortMenu(options: List<YtChip>, modifier: Modifier = Modifier, o
     }
 }
 
+private fun YtChip.isReloading(state: Pager.State.Ready): Boolean =
+    state.refreshing && token != null && token == state.reloadingChipToken
+
 /** One feed filter pill; [onClick] null = a non-interactive label in the same style. [choice] false
- *  when [selected] only emphasizes an action, so screen readers don't call it selected. */
+ *  when [selected] only emphasizes an action, so screen readers don't call it selected. [loading]
+ *  spins after the title while the page it filters to loads. */
 @Composable
-fun FeedChip(title: String, selected: Boolean, choice: Boolean = true, onClick: (() -> Unit)?) {
+fun FeedChip(title: String, selected: Boolean, choice: Boolean = true, loading: Boolean = false, onClick: (() -> Unit)?) {
+    val contentColor = if (selected) Color.White else DesignColors.InkSoft
     ChipTapArea(onClick, selected = selected.takeIf { choice }) { indication ->
-        Text(
-            title,
-            style = TextStyle(fontSize = ChipTextSize, color = if (selected) Color.White else DesignColors.InkSoft),
-            maxLines = 1,
-            modifier = Modifier
+        Row(
+            Modifier
                 .clip(RoundedCornerShape(999.dp))
                 .background(if (selected) DesignColors.Accent else Color.Transparent)
                 .border(1.dp, if (selected) DesignColors.Accent else DesignColors.Outline, RoundedCornerShape(999.dp))
                 .then(indication)
                 .chipPadding(),
-        )
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(DesignSpacing.Space8),
+        ) {
+            Text(title, style = TextStyle(fontSize = ChipTextSize, color = contentColor), maxLines = 1)
+            if (loading) {
+                CircularProgressIndicator(Modifier.size(12.dp), color = contentColor, strokeWidth = 2.dp)
+            }
+        }
     }
 }
 
@@ -990,22 +1047,26 @@ internal fun rankMusicFirst(items: List<YtFeedItem>): List<YtFeedItem> {
 /** The three feed layout bands a surface width falls into. */
 internal enum class FeedLayout { SquareList, WideList, Grid }
 
-/** The ONE place the feed breakpoints live: square list under 320dp, 16:9 list to 469dp, then the
- *  grid ([gridColumnsFor] columns). */
+/** Where the grid starts: two [GRID_CARD_MIN_WIDTH] cards fit at the compact margin and gutter. */
+internal val FEED_GRID_MIN_WIDTH: androidx.compose.ui.unit.Dp =
+    GRID_CARD_MIN_WIDTH * 2 + DesignSpacing.Space8 + DesignSpacing.MarginCompact * 2
+
+/** The ONE place the feed breakpoints live: square list under 320dp, 16:9 list below
+ *  [FEED_GRID_MIN_WIDTH], then the grid ([gridColumnsFor] columns). */
 internal fun feedLayoutFor(width: androidx.compose.ui.unit.Dp): FeedLayout = when {
     width < 320.dp -> FeedLayout.SquareList
-    width < 470.dp -> FeedLayout.WideList
+    width < FEED_GRID_MIN_WIDTH -> FeedLayout.WideList
     else -> FeedLayout.Grid
 }
 
 /** Feed list rows under 380dp use [ListTitleCompactStyle]. */
 internal fun feedCompactTitleFor(width: androidx.compose.ui.unit.Dp): Boolean = width < 380.dp
 
-/** Max-item-width model: the FEWEST columns (≥2) keeping every card ≤ [GRID_CARD_MAX_WIDTH], with
- *  the gutter between columns counted. Cards shrink toward the next column, never past the max. */
+/** Min-item-width model: the MOST columns (≥2) keeping every card ≥ [GRID_CARD_MIN_WIDTH], with
+ *  the gutter between columns counted. Cards grow toward the next column, never below the min. */
 internal fun gridColumnsFor(width: androidx.compose.ui.unit.Dp): Int {
     val metrics = gridMetricsFor(width)
-    return kotlin.math.ceil((width - metrics.margin * 2 + metrics.gutter) / (GRID_CARD_MAX_WIDTH + metrics.gutter))
+    return kotlin.math.floor((width - metrics.margin * 2 + metrics.gutter) / (GRID_CARD_MIN_WIDTH + metrics.gutter))
         .toInt()
         .coerceAtLeast(2)
 }

@@ -28,7 +28,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
@@ -44,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.ApplicationScope
 import androidx.compose.ui.window.Window
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import io.ymusic.imageloader.AsyncImage
 import io.ymusic.player.isPlaying
 import io.ymusic.ui.AppGraph
@@ -51,12 +51,12 @@ import io.ymusic.ui.SlimSeekBar
 import io.ymusic.ui.a11yActionLabel
 import io.ymusic.ui.resources.Res
 import io.ymusic.ui.resources.badge_live
+import io.ymusic.ui.resources.cd_close
 import io.ymusic.ui.resources.cd_next
 import io.ymusic.ui.resources.cd_open_app
 import io.ymusic.ui.resources.cd_pause
 import io.ymusic.ui.resources.cd_play
 import io.ymusic.ui.resources.cd_previous
-import io.ymusic.ui.resources.cd_stop_dismiss
 import io.ymusic.ui.resources.mini_player_nothing_playing
 import io.ymusic.ui.seekBarA11y
 import io.ymusic.ui.skipSegmentFractions
@@ -78,16 +78,14 @@ import javax.swing.WindowConstants
 /**
  * The tray's notification-style popup: a small always-on-top card near the tray corner with the
  * current media info and transport — art, title/artist, prev / play-pause / next, a seek bar,
- * "open the app", and ✕ = [onDismiss] (end the listening session: clear the queue — which removes
- * the tray — and exit the app when no window is left). Dismisses itself when it loses focus
- * (click-away), like a system notification.
+ * "open the app", and ✕ = [onClose] (closes the popup; playback and the queue carry on). Dismisses
+ * itself when it loses focus (click-away), like a system notification.
  */
 @Composable
 fun ApplicationScope.MiniPlayerWindow(
     graph: AppGraph,
     anchor: Point? = null,
     onOpenApp: () -> Unit,
-    onDismiss: () -> Unit,
     onClose: () -> Unit,
 ) {
     val currentOnClose by rememberUpdatedState(onClose)
@@ -96,9 +94,10 @@ fun ApplicationScope.MiniPlayerWindow(
             ComposeWindow().apply {
                 // No taskbar button on Windows. The type can only be set before the window is shown.
                 if (isWindows) type = java.awt.Window.Type.UTILITY
-                title = "YMusic"
+                title = DevInstance.appTitle
                 isUndecorated = true
                 isTransparent = true
+                if (isWindows) followRendererTransparency()
                 isResizable = false
                 isAlwaysOnTop = true
                 val position = miniPlayerPosition(anchor)
@@ -127,7 +126,7 @@ fun ApplicationScope.MiniPlayerWindow(
             tonalElevation = 6.dp,
             shadowElevation = 8.dp,
         ) {
-            MiniPlayerContent(graph, onOpenApp, onDismiss)
+            MiniPlayerContent(graph, onOpenApp, onClose)
         }
     }
 }
@@ -170,12 +169,12 @@ private fun miniPlayerPosition(anchor: Point?): Point {
 private enum class TrayEdge { Top, Bottom, Left, Right }
 
 @Composable
-private fun MiniPlayerContent(graph: AppGraph, onOpenApp: () -> Unit, onDismiss: () -> Unit) {
+private fun MiniPlayerContent(graph: AppGraph, onOpenApp: () -> Unit, onClose: () -> Unit) {
     val player = graph.player
-    val status by player.status.collectAsState()
-    val progress by player.progress.collectAsState()
-    val queue by player.queue.collectAsState()
-    val skipSegments by player.skipSegments.collectAsState()
+    val status by player.status.collectAsStateWithLifecycle()
+    val progress by player.progress.collectAsStateWithLifecycle()
+    val queue by player.queue.collectAsStateWithLifecycle()
+    val skipSegments by player.skipSegments.collectAsStateWithLifecycle()
     val item = queue.currentItem
     val playing = status.state.isPlaying()
 
@@ -220,7 +219,7 @@ private fun MiniPlayerContent(graph: AppGraph, onOpenApp: () -> Unit, onDismiss:
             IconButton(onClick = onOpenApp, modifier = Modifier.size(30.dp).a11yActionLabel(stringResource(Res.string.cd_open_app))) {
                 Icon(Icons.AutoMirrored.Filled.OpenInNew, null, Modifier.size(16.dp))
             }
-            IconButton(onClick = onDismiss, modifier = Modifier.size(30.dp).a11yActionLabel(stringResource(Res.string.cd_stop_dismiss))) {
+            IconButton(onClick = onClose, modifier = Modifier.size(30.dp).a11yActionLabel(stringResource(Res.string.cd_close))) {
                 Icon(Icons.Default.Close, null, Modifier.size(16.dp))
             }
         }
@@ -322,7 +321,7 @@ fun PlayerTray(icon: Painter, logger: Logger, menu: PopupMenu?, onClick: (screen
                     *TRAY_SCALES.map { s -> icon.rasterize(kotlin.math.ceil(px * s).toInt()) }.toTypedArray(),
                 )
             }
-            TrayIcon(image, "YMusic").apply {
+            TrayIcon(image, DevInstance.appTitle).apply {
                 addMouseListener(
                     object : MouseAdapter() {
                         // TrayIcon events carry SCREEN coordinates (there is no component space).

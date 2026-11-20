@@ -34,6 +34,7 @@ void mse_host_set_eq(void *h, const float *bands_db);
 void mse_host_set_bass(void *h, float db);
 void mse_host_set_virtualizer(void *h, float width);
 void mse_host_set_preamp(void *h, float db);
+void mse_host_set_video_hidden(void *h, int hidden);
 int mse_host_pcm_levels(void *h, float *out, int n);
 int mse_ios_mux_m4a(const char *audio_path, const char *cover_path, const char *output_path,
                     const char *title, const char *artist, const char *video_id);

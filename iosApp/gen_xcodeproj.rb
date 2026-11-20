@@ -4,7 +4,9 @@
 # (:iosAppKotlin:embedAndSignAppleFrameworkForXcode, -PkmpTargets=all so every iOS target is
 # configured); Xcode compiles iosApp/iOSApp.swift, which hosts MainViewControllerKt.MainViewController.
 #
-# REQUIRES XCODE 26+ because Compose Multiplatform 1.11.1 links against iOS 26 UIKit symbols.
+# Xcode 26 (iOS 26 SDK) links cleanly. Compose Multiplatform 1.11.1's ui-uikit references the iOS 26
+# UIViewLayoutRegion, so on an older Xcode the build phase falls back to -PiosAllowUndefined=true
+# (-undefined dynamic_lookup) and says so with a build warning.
 #
 #   ruby gen_xcodeproj.rb
 require "xcodeproj"
@@ -46,8 +48,14 @@ gradle_phase.shell_script = <<~SH
   # Let this shell (Xcode's child) codesign; Gradle's codesign hits errSecInternalComponent.
   SIGN_ID="${EXPANDED_CODE_SIGN_IDENTITY:-}"
   unset EXPANDED_CODE_SIGN_IDENTITY
-  # -PkmpTargets=all configures iosArm64 and iosSimulatorArm64 on every host.
-  ./gradlew --no-daemon :iosAppKotlin:embedAndSignAppleFrameworkForXcode -PkmpTargets=all
+  # -PkmpTargets=all so iosArm64 / iosSimulatorArm64 are configured even on this Intel host.
+  # Xcode < 26 lacks Compose 1.11.1's iOS 26 UIViewLayoutRegion; only there link with dynamic_lookup.
+  ALLOW_UNDEFINED=""
+  if [ "${XCODE_VERSION_MAJOR:-0}" -lt 2600 ]; then
+    echo "warning: Xcode ${XCODE_VERSION_ACTUAL:-?} is older than 26: YMusicApp.framework links with -undefined dynamic_lookup, so a missing symbol crashes at runtime instead of failing the build"
+    ALLOW_UNDEFINED="-PiosAllowUndefined=true"
+  fi
+  ./gradlew --no-daemon :iosAppKotlin:embedAndSignAppleFrameworkForXcode -PkmpTargets=all $ALLOW_UNDEFINED
   FW="$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH/YMusicApp.framework"
   if [ -n "$SIGN_ID" ] && [ "$SIGN_ID" != "-" ] && [ -d "$FW" ]; then
     /usr/bin/codesign --force --sign "$SIGN_ID" --timestamp=none "$FW"
@@ -55,14 +63,17 @@ gradle_phase.shell_script = <<~SH
 SH
 target.build_phases.unshift(target.build_phases.delete(gradle_phase))
 
-# Last, after Info.plist is processed: the version name is gradle.properties' ymusic.versionName,
-# shared with Android and desktop.
-version_phase = target.new_shell_script_build_phase("Stamp version name from gradle.properties")
+# Last, after Info.plist is processed: the version is gradle.properties' ymusic.versionName and
+# ymusic.versionCode, shared with Android and desktop.
+version_phase = target.new_shell_script_build_phase("Stamp version from gradle.properties")
 version_phase.shell_script = <<~'SH'
 set -e
 v=$(sed -n 's/^ymusic\.versionName=//p' "$SRCROOT/../gradle.properties")
+c=$(sed -n 's/^ymusic\.versionCode=//p' "$SRCROOT/../gradle.properties")
 [ -n "$v" ] || { echo "error: ymusic.versionName missing from gradle.properties"; exit 1; }
+[ -n "$c" ] || { echo "error: ymusic.versionCode missing from gradle.properties"; exit 1; }
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $v" "$TARGET_BUILD_DIR/$INFOPLIST_PATH"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $c" "$TARGET_BUILD_DIR/$INFOPLIST_PATH"
 SH
 
 target.build_configurations.each do |config|
@@ -79,7 +90,7 @@ target.build_configurations.each do |config|
   s["ONLY_ACTIVE_ARCH"] = "YES"
   s["ASSETCATALOG_COMPILER_APPICON_NAME"] = "AppIcon"
   s["ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS"] = "NO"
-  # Compose MP has no iosX64, so the simulator path is arm64-only (Apple-Silicon hosts).
+  # No iosX64 target: the simulator path is arm64-only (Apple-Silicon hosts).
   s["FRAMEWORK_SEARCH_PATHS[sdk=iphoneos*]"] = "$(SRCROOT)/../commonUi/build/bin/iosArm64/debugFramework"
   s["FRAMEWORK_SEARCH_PATHS[sdk=iphonesimulator*]"] = "$(SRCROOT)/../commonUi/build/bin/iosSimulatorArm64/debugFramework"
   s["OTHER_LDFLAGS"] = "-framework YMusicApp"

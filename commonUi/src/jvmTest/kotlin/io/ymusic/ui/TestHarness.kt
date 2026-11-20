@@ -197,6 +197,10 @@ internal class StubPlayer : Player {
 
     override fun setDucked(ducked: Boolean) = Unit
 
+    override fun setVoiceDucked(ducked: Boolean) = Unit
+
+    override fun setVideoHidden(hidden: Boolean) = Unit
+
     override var speed: Float = 1f
 
     override fun setPitch(pitch: Float) {}
@@ -209,6 +213,8 @@ internal class StubPlayer : Player {
 
     override fun setPreamp(db: Float) {}
     override fun setInAppAudioFx(enabled: Boolean) {}
+
+    override fun setStableVolume(enabled: Boolean) {}
 
     override fun setAudioOnly(audioOnly: Boolean) {}
 

@@ -21,6 +21,7 @@ import okio.IOException
 import okio.use
 import projectcommon.error.TechnicalException
 import projectcommon.error.codedError
+import kotlin.math.round
 
 /** Caption tracks to fetch: the ones a per-task [choice] names (MP3 and Opus take them as lyrics); else the
  *  track in [preferredLanguage] or, lacking it, the video's default; else none. */
@@ -57,10 +58,19 @@ class DownloadedStreams(
     val captions: List<DownloadedCaption>,
     /** The artist read from the player response, for when the request carried none. */
     val artist: String? = null,
+    private val loudnessTargetLkfs: Double? = null,
     /** The output format these streams are for: the task's, or MP4 when it asked for WebM video and the
      *  video has no WebM-muxable stream. */
     val format: DownloadFormat,
-)
+) {
+    /** dB from this audio's measured loudness to the video's target; null when YouTube gave neither. */
+    val loudnessGainDb: Double?
+        get() {
+            val measured = audio.format.loudnessLkfs ?: return null
+            val target = loudnessTargetLkfs ?: return null
+            return round((target - measured) * 100) / 100
+        }
+}
 
 /**
  * The download step of the pipeline: takes a queued [DownloadTask] and produces the elementary files
@@ -70,8 +80,8 @@ class DownloadedStreams(
  *     which drives the WebView.
  *  2. picks the concrete audio/video [AdaptiveFormat]s for the task and the caption tracks for [captions].
  *  3. streams each audio/video track to its own scratch file over SABR — resumable (the scratch's
- *     on-disk length is the resume point, on the streams the task remembers), re-attesting with a bounded
- *     retry if the PO token is rejected mid-stream.
+ *     on-disk length is the resume point, on the streams the task remembers), re-attesting once if the
+ *     PO token is rejected mid-stream.
  *  4. fetches each selected caption over plain HTTP (its baseUrl carries the content PO token, see
  *     [timedTextUrl]) into a scratch file.
  *
@@ -81,6 +91,7 @@ class DownloadedStreams(
 class YtStreamDownloader(
     private val resolver: SabrSpecResolver,
     private val client: KmpHttpClient,
+    /** Used when the engine's spec names no User-Agent (a bundle that predates it). */
     private val userAgent: String,
     private val storage: DownloadStorage,
     private val mediaCache: MediaCache?,
@@ -119,12 +130,13 @@ class YtStreamDownloader(
         downloadTracks(
             spec, audioFmt, videoFmt, audioScratch, videoScratch, onProgress,
             reAttest = { spec = resolveSpec(task.videoId).spec; spec },
+            remint = { remintSpec(task.videoId).also { if (it is SpecRemint.Minted) spec = it.video.spec } },
         )
 
         // Captions are KB-scale; fetched after the media, whole (no range-resume), not folded into progress.
         // Best-effort: a caption that fails to download is logged and skipped — it must not fail the media.
         val captionFiles = captionPicks.mapNotNull { track ->
-            runCatching { downloadCaption(task.id, track) }
+            runCatching { downloadCaption(task.id, track, spec.userAgent ?: userAgent) }
                 .onFailure {
                     if (it is CancellationException) throw it
                     log?.log(Logger.Level.WARN, "caption ${track.languageCode} failed: ${it.message}", it)
@@ -137,6 +149,7 @@ class YtStreamDownloader(
             video = videoFmt?.let { DownloadedStream(it, videoScratch!!) },
             captions = captionFiles,
             artist = resolved.artist,
+            loudnessTargetLkfs = resolved.loudnessTargetLkfs,
             format = format,
         )
     }
@@ -148,9 +161,13 @@ class YtStreamDownloader(
         scratch.delete()
     }
 
-    private suspend fun resolveSpec(videoId: String): ResolvedVideo =
+    private suspend fun resolveSpec(videoId: String): ResolvedVideo = noSabrStreamCoded(videoId) { resolver.resolve(videoId) }
+
+    private suspend fun remintSpec(videoId: String): SpecRemint = noSabrStreamCoded(videoId) { resolver.remint(videoId) }
+
+    private suspend fun <T> noSabrStreamCoded(videoId: String, block: suspend () -> T): T =
         try {
-            resolver.resolve(videoId)
+            block()
         } catch (e: IllegalStateException) {
             // SabrSpecBuilder throws this when the response carries no serverAbrStreamingUrl.
             if (e.message?.contains("serverAbrStreamingUrl") == true) {
@@ -194,7 +211,7 @@ class YtStreamDownloader(
     }
 
     /** GET the caption's WebVTT into a scratch file. A body without cues is a failure, never an empty track. */
-    private suspend fun downloadCaption(taskId: String, track: CaptionTrack): DownloadedCaption {
+    private suspend fun downloadCaption(taskId: String, track: CaptionTrack, userAgent: String): DownloadedCaption {
         val scratch = storage.scratch(taskId, "cc.${captionKey(track.languageCode, track.isAsr)}.vtt")
         scratch.delete() // tiny file — always refetch whole rather than resume a partial
         val url = track.baseUrl + (if ('?' in track.baseUrl) "&" else "?") + "fmt=vtt"
@@ -202,8 +219,9 @@ class YtStreamDownloader(
         try {
             if (!response.isSuccessful) throw IOException("caption ${track.languageCode} HTTP ${response.code}")
             val bytes = response.body.byteString()
-            if (!bytes.utf8().contains("-->")) throw IOException("caption ${track.languageCode} has no cues (${bytes.size} bytes)")
-            scratch.appendSink().use { sink -> sink.write(bytes); sink.flush() }
+            val vtt = bytes.utf8()
+            if (!vtt.contains("-->")) throw IOException("caption ${track.languageCode} has no cues (${bytes.size} bytes)")
+            scratch.appendSink().use { sink -> sink.writeUtf8(capCueDuration(vtt)); sink.flush() }
         } finally {
             response.close()
         }
@@ -211,10 +229,10 @@ class YtStreamDownloader(
     }
 
     /**
-     * Run the SABR download, re-priming a fresh spec up to [MAX_PO_TOKEN_RETRIES] times if the PO token
-     * is rejected mid-stream. Each session records its segments in [segmentIndex] and seeds its resume
-     * cursor from the on-disk file length via that index — so pause/resume and re-attest continue from
-     * the last segment (see [SabrSession.download]), rather than re-fetching from zero.
+     * Run the SABR download, retrying once on a new PO token when googlevideo withholds media or
+     * rejects the token. Each session records its segments in [segmentIndex] and seeds its resume
+     * cursor from the on-disk file length via that index — so pause/resume and the retry continue
+     * from the last segment (see [SabrSession.download]), rather than re-fetching from zero.
      */
     private suspend fun downloadTracks(
         spec: SabrStreamSpec,
@@ -224,33 +242,16 @@ class YtStreamDownloader(
         videoFile: DownloadFile?,
         onProgress: (Long, Long) -> Unit,
         reAttest: suspend () -> SabrStreamSpec,
+        remint: suspend () -> SpecRemint,
     ) {
         val progress = SabrProgress { aDone, aLen, vDone, vLen -> onProgress(aDone + vDone, aLen + vLen) }
         var current = spec
-        var retries = 0
-        var firstAttestationFailure: Throwable? = null
-
-        suspend fun refreshAttestation(error: Throwable): SabrStreamSpec {
-            firstAttestationFailure?.let(error::addSuppressed) ?: run { firstAttestationFailure = error }
-            if (retries >= MAX_ATTESTATION_RETRIES) throw sabrFailure(error)
-            retries++
-            log?.log(
-                Logger.Level.WARN,
-                "SABR attestation rejected or pending, refreshing ($retries/$MAX_ATTESTATION_RETRIES): ${error.message}",
-            )
-            return try {
-                reAttest()
-            } catch (refreshError: Throwable) {
-                refreshError.addSuppressed(error)
-                throw refreshError
-            }
-        }
-
+        var refused: IOException? = null
         while (true) {
             try {
                 SabrSession(logger = log).download(
                     client = client,
-                    userAgent = userAgent,
+                    userAgent = current.userAgent ?: userAgent,
                     spec = current,
                     audio = SabrTrack(audioFmt, audioFile),
                     video = videoFmt?.let { SabrTrack(it, videoFile!!) },
@@ -260,20 +261,50 @@ class YtStreamDownloader(
                     segmentIndex = segmentIndex,
                 )
                 return
-            } catch (e: SabrPoTokenInvalid) {
-                current = refreshAttestation(e)
-            } catch (e: SabrAttestationPending) {
-                current = refreshAttestation(e)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
-                throw sabrFailure(e)
+                if (e !is SabrPoTokenInvalid && e !is SabrAttestationPending) throw sabrFailure(e)
+                refused?.let {
+                    e.addSuppressed(it)
+                    throw sabrFailure(e)
+                }
+                refused = e as IOException
+                current = try {
+                    specOnNewToken(e, reAttest, remint)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Throwable) {
+                    if (error !== e && error.cause !== e) error.addSuppressed(e)
+                    throw error
+                }
             }
         }
     }
-}
 
-private const val MAX_ATTESTATION_RETRIES = 3
+    /** The spec for the one retry: the player re-mints its token, unless googlevideo accepts the
+     *  token it has, in which case the download itself is at fault. */
+    private suspend fun specOnNewToken(
+        refused: IOException,
+        reAttest: suspend () -> SabrStreamSpec,
+        remint: suspend () -> SpecRemint,
+    ): SabrStreamSpec = when (val result = remint()) {
+        is SpecRemint.Minted -> {
+            log?.log(Logger.Level.WARN, "PO token refused, retrying on a re-minted one: ${refused.message}")
+            result.video.spec
+        }
+        SpecRemint.PlayerAccepted -> throw TechnicalException(
+            "E70054",
+            "googlevideo refused the download while it accepts the player's PO token: ${refused.message}",
+            cause = refused,
+        )
+        SpecRemint.Unavailable -> {
+            if (refused !is SabrPoTokenInvalid) throw sabrFailure(refused)
+            log?.log(Logger.Level.WARN, "PO token invalid, re-attesting: ${refused.message}")
+            reAttest()
+        }
+    }
+}
 
 /** An uncoded SABR session failure as its site code; coded, network and disk-full failures pass through. */
 private fun sabrFailure(error: Throwable): Throwable = when {

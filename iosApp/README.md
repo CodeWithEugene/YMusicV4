@@ -1,38 +1,55 @@
-# `:iosApp`
+# iosApp — the shared Compose UI on iOS
 
-The iOS product shell runs the shared Compose `App` from `:commonUi` over the AVFoundation local and MSE YouTube engines. Offline M4A audio and MP4 video downloads persist in the app's Documents directory, appear in Library, resume after reopening the app, and can be exported with the system share sheet or the Files app.
+The iOS product shell: runs the **same** shared Compose `App` (`:commonUi`) as the desktop and Android
+shells, on a real iPhone/iPad, over the AVFoundation local + MSE YouTube engines. Symmetric with
+`:desktopApp` and `:androidApp`.
 
-`iosApp/iOSApp.swift` hosts `MainViewControllerKt.MainViewController()` from the `YMusicApp` framework. The framework builds the iOS `AppGraph` and runs `App(graph)`.
+`iosApp/iOSApp.swift` (SwiftUI `@main`) hosts `MainViewControllerKt.MainViewController()` from the
+`:commonUi` **YMusicApp** framework, which builds the iOS `AppGraph` and runs `App(graph)`.
 
-## Requirements
+## SDK / Xcode requirement
 
-The app requires Xcode 26 or newer. Compose Multiplatform 1.11.1 links against iOS 26 UIKit symbols, so older SDKs cannot link the framework safely.
+The whole Kotlin chain (`:quickjs` / `:media-store` / `:dynamic-engine` / `:player` + the shared Compose
+UI) **compiles for `iosArm64`** here. Linking the Compose framework is the subtle part:
 
-Build the pinned sibling `ffmpeg-build` checkout before building the app.
+Compose Multiplatform 1.11.1 (with Kotlin/Native 2.4.0, whose toolchain is pinned to **Xcode 26.4**)
+links `ui-uikit` against `UIViewLayoutRegion` — an **iOS 26** UIKit class. It is absent from the iOS
+17.4 (Xcode 15.3) **and** iOS 18.2 (Xcode 16.2) SDKs, so a normal link fails with:
 
-```sh
-git clone --recursive --shallow-submodules https://github.com/ymusic-io/ffmpeg-build ../ffmpeg-build
-git -C ../ffmpeg-build checkout "$(sed -n 's/^ *FFMPEG_BUILD_REF: //p' .github/workflows/release.yml)"
-../ffmpeg-build/scripts/build-ios.sh iphoneos
-../ffmpeg-build/scripts/build-ios.sh iphonesimulator
+```
+Undefined symbols for architecture arm64:
+  "_OBJC_CLASS_$_UIViewLayoutRegion", referenced from: … ui-uikit … CMPLayoutRegion.o
 ```
 
-The build stops with this command when the native iOS libraries are absent. A fallback native stub is available to library consumers on Apple targets, but a functional YMusic iOS application requires the real MSE host.
-
-## Run on a device
-
-1. Run `ruby gen_xcodeproj.rb` after changing the project generator. It requires the `xcodeproj` gem.
-2. Open `iosApp.xcodeproj`.
-3. Select the `iosApp` target and choose your Team under Signing and Capabilities.
-4. Connect and unlock the device, trust the computer, and enable Developer Mode.
-5. Select the device and run the app.
-6. With a free Personal Team, trust the developer profile under Settings, General, and VPN and Device Management.
-
-The Xcode build phase runs `:iosAppKotlin:embedAndSignAppleFrameworkForXcode` with `-PkmpTargets=all`, which configures the device and Apple silicon simulator targets.
+- **Xcode 26 (iOS 26 SDK): a clean link**, every symbol resolved (the Mac mini, Xcode 26.6). That
+  needs macOS 15/26.
+- **Xcode < 26 (the Intel Mac on macOS 14.8 / Xcode 16.2): an escape hatch.** The Gradle build phase
+  checks `XCODE_VERSION_MAJOR` and only below 2600 passes `-PiosAllowUndefined=true`, which links with
+  `-undefined dynamic_lookup` and prints a build warning. Compose `@available`-guards its use of the
+  iOS 26 class, so a sub-iOS-26 device never references it, but the flag hides **every** undefined
+  symbol: a library missing from the link becomes a launch crash. A dev/test build only, **not**
+  App-Store-shippable.
 
 ## Simulator
 
-Compose Multiplatform 1.11.1 does not provide an `iosX64` target. The simulator therefore requires an Apple silicon Mac and uses `iosSimulatorArm64`.
+The project has **no `iosX64`** target (neither Compose MP 1.11.1 nor the static iOS ffmpeg exists for
+x86_64), so this app **cannot run in an Intel Mac's Simulator**. Apple Silicon hosts use
+`iosSimulatorArm64` (Xcode destination → any iPhone/iPad sim). On Intel, use a plugged-in device.
+
+## Run on a device
+
+1. `ruby gen_xcodeproj.rb` (regenerates `iosApp.xcodeproj`; needs the `xcodeproj` gem)
+2. `open iosApp.xcodeproj`
+3. Target **iosApp** → **Signing & Capabilities** → pick your **Team** (change the bundle id if
+   `com.ymusic.iosapp` is taken).
+4. Plug in + unlock + **Trust** the device; select it as the run destination.
+5. **Run** (⌘R). First launch: **Settings → General → VPN & Device Management** → trust the profile.
+
+The Gradle build phase runs `:iosAppKotlin:embedAndSignAppleFrameworkForXcode -PkmpTargets=all`
+(plus `-PiosAllowUndefined=true` on Xcode < 26, see above) to build + embed + sign `YMusicApp.framework`. `-PkmpTargets=all` configures
+`iosArm64` on this Intel host; `JAVA_HOME` is set to `$HOME/.sdkman/candidates/java/current`.
+
+Signing is the only manual step — this environment can't enter your Apple ID; Xcode does it locally.
 
 ## Downloads
 
@@ -42,6 +59,9 @@ A download continues only while iOS allows the app to execute. When the app is s
 
 ## Notes
 
-* Library includes completed downloads from the app's Documents directory. Adding and scanning arbitrary external folders is not yet available.
-* Local video does not yet use the shared iOS surface. AVFoundation local playback renders through its own player layer.
-* Settings to Link devices uses the camera to scan a desktop QR code, then requires a PIN or Face ID before sending encrypted YouTube cookies.
+- `mediaStore` is null in the iOS graph for now (Library shows empty) — keeps the shell lean; the
+  media-store SQLDelight native driver can be wired later (it already compiles for `iosArm64`).
+- Local video isn't hosted in the shared surface on iOS yet (AVFoundation renders via `AVPlayerLayer`
+  in the player-lab spike); YouTube picture is MSE `copyFrame`. Audio (the music default) is fine.
+- Settings → Link devices uses the camera (`NSCameraUsageDescription`) to scan a desktop QR, then
+  PIN/Face ID (`NSFaceIDUsageDescription`) before POSTing the encrypted YouTube cookies.

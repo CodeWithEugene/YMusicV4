@@ -26,8 +26,6 @@ export interface WireFeedItem {
   /** Composed by the engine, rendered verbatim: e.g. channel name, or view count — the engine's call. */
   subtitleLine1?: string;
   subtitleLine2?: string;
-  /** Optional action label (e.g. "Subscribe" on a channel); absent = no CTA. */
-  ctaText?: string;
   /** Channel-link target: tapping the byline/avatar navigates here. */
   channelId?: string;
   /** A video's owner channel / credited artists — the player's artist line (mini player, Now
@@ -192,7 +190,8 @@ export interface WireFeedPage {
   pageHeader?: WirePageHeader;
   pageTabs?: WirePageTab[];
   autoplayVideoId?: string;
-  /** A part of the page failed but the rest is served: the code the app shows as a transient message. */
+  /** A part of the page failed but the rest is served, or a failed refresh served the cached page:
+   *  the code the app shows as a transient message. */
   partialErrorCode?: string;
 }
 

@@ -1,18 +1,32 @@
 package io.ymusic.ui
 
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import platform.UIKit.UIApplication
 
 internal actual val platformUsesTouch: Boolean = true
 
+internal actual val platformIsTelevision: Boolean = false
+
 internal actual val desktopLayoutHole: Boolean = false
+
+internal actual val contextMenuKey: Key = Key.Menu
+
+internal actual val KeyEvent.isKeyRepeat: Boolean get() = false
+
+internal actual val KeyEvent.isLongPress: Boolean get() = false
 
 actual fun Modifier.a11yActionLabel(label: String?): Modifier =
     if (label.isNullOrEmpty()) this
@@ -32,13 +46,16 @@ internal actual fun PlatformBackHandler(enabled: Boolean, onBack: () -> Unit) {
 }
 
 @Composable
+internal actual fun rememberTouchExplorationEnabled(): Boolean = false
+
+@Composable
 internal actual fun SyncSystemBars(dark: Boolean) {
     // The status bar rides the hosting UIViewController; Compose already draws edge-to-edge
     // under it, and its text style can be wired through MainViewController when needed.
 }
 
 @Composable
-internal actual fun SyncSensorRotation(locked: Boolean) {
+internal actual fun SyncSensorRotation(rotation: VideoRotation) {
     // Info.plist already lists portrait and both landscapes.
 }
 
@@ -59,7 +76,11 @@ internal actual fun KeepScreenOn(enabled: Boolean) {
 
 @Composable
 internal actual fun Modifier.keepBelowStatusBar(): Modifier =
-    windowInsetsPadding(WindowInsets.statusBars)
+    windowInsetsPadding(WindowInsets.statusBars.union(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)))
+
+@Composable
+internal actual fun Modifier.fullscreenSidePadding(): Modifier =
+    windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
 
 @Composable
 internal actual fun Modifier.drawerEdgeGestureExclusion(enabled: Boolean): Modifier = this

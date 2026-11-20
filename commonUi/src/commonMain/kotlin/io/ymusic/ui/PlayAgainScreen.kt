@@ -2,6 +2,7 @@ package io.ymusic.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -12,7 +13,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
@@ -53,6 +53,7 @@ import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.stringResource
 import projectcommon.error.TechnicalException
+import projectcommon.log.captureUnlessEnvironmental
 
 /** "Play again" (legacy Rewind playlist): the queues played lately, newest first; a tap resumes one. */
 @Composable
@@ -78,7 +79,7 @@ fun PlayAgainScreen(graph: AppGraph, coordinator: PlaybackCoordinator) {
             } catch (c: CancellationException) {
                 throw c
             } catch (e: Exception) {
-                log?.captureError(TechnicalException("E60060", "play-again list failed to load", cause = e))
+                log?.captureUnlessEnvironmental(TechnicalException("E60060", "play-again list failed to load", cause = e))
                 errorCode = "E60060"
             }
         }
@@ -118,8 +119,8 @@ fun PlayAgainScreen(graph: AppGraph, coordinator: PlaybackCoordinator) {
         list == null -> CenteredBox { CircularProgressIndicator() }
         list.isEmpty() -> EmptyState(stringResource(Res.string.play_again_empty), onReload = { reloads++ })
         else -> LazyVerticalGrid(
-            columns = GridCells.Adaptive(minSize = PlayAgainCardMinWidth),
-            modifier = Modifier.fillMaxSize(),
+            columns = railStableAdaptive(PlayAgainCardMinWidth),
+            modifier = Modifier.fillMaxSize().itemList(),
             state = gridState,
             contentPadding = PaddingValues(
                 start = DesignSpacing.Space16,
@@ -166,9 +167,13 @@ private fun PlayAgainCard(
     val fromBeginning = stringResource(Res.string.menu_play_from_beginning)
     val remove = stringResource(Res.string.menu_remove)
     val cardShape = RoundedCornerShape(MediaCardCorner)
+    // The list's item stop: Shift+F10 on it opens its ⋮.
     Column(
         modifier
             .fillMaxWidth()
+            .focusRing(cardShape)
+            .focusable()
+            .semantics(mergeDescendants = true) {}
             .background(DesignColors.SettingsCard, cardShape)
             .border(1.dp, DesignColors.Divider, cardShape)
             .padding(start = DesignSpacing.Space16, end = DesignSpacing.Space4, top = DesignSpacing.Space8, bottom = DesignSpacing.Space16),
@@ -177,7 +182,7 @@ private fun PlayAgainCard(
         Row(
             horizontalArrangement = Arrangement.spacedBy(DesignSpacing.Space16),
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(top = DesignSpacing.Space8).semantics(mergeDescendants = true) {},
+            modifier = Modifier.padding(top = DesignSpacing.Space8),
         ) {
             LibraryThumb(Icons.Default.MusicNote, badge = null, artUrl = session.thumbnailUrl)
             Column(Modifier.weight(1f)) {
@@ -203,7 +208,7 @@ private fun PlayAgainCard(
             horizontalArrangement = Arrangement.spacedBy(DesignSpacing.Space8),
             modifier = Modifier.padding(end = DesignSpacing.Space8),
         ) {
-            QueueStrip(session, Modifier.weight(1f))
+            QueueStrip(session, Modifier.weight(1f).a11ySilent())
             PlayPill(Icons.Default.PlayArrow, stringResource(Res.string.play_again_resume), filled = false, onClick = onPlay)
         }
     }

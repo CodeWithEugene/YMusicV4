@@ -383,7 +383,6 @@ function channelItem(r: Record<string, unknown>): WireFeedItem | null {
   const thumbs = thumbsOf(r["thumbnail"]);
   if (thumbs !== undefined) item["thumbs"] = thumbs;
   setLines(item, [subscribers]);
-  item["ctaText"] = "Subscribe";
   return item;
 }
 
@@ -402,7 +401,8 @@ function lockupItem(lv: Record<string, unknown>): WireFeedItem | null {
         : type.indexOf("PLAYLIST") >= 0 ||
             type.indexOf("ALBUM") >= 0 ||
             type.indexOf("PODCAST") >= 0 ||
-            type.indexOf("MIX") >= 0
+            type.indexOf("MIX") >= 0 ||
+            type.indexOf("STATION") >= 0
           ? "playlist"
           : null;
   if (kind === null) return null;
@@ -529,7 +529,6 @@ function lockupItem(lv: Record<string, unknown>): WireFeedItem | null {
     return true;
   });
   setLines(item, [byline, line2]);
-  if (kind === "channel") item["ctaText"] = "Subscribe";
   return item;
 }
 
@@ -702,7 +701,9 @@ function refinementCardItem(r: unknown): WireFeedItem | null {
 /**
  * An artist search's universal watch card (secondaryContents.…universalWatchCardRenderer, verified
  * live 2026-07-22 for "bruno mars"): the artist header + their radio Mix lead, then each card
- * section — the top-songs list and the Albums card row — as its own titled section.
+ * section — the top-songs list and the Albums card row — as its own titled section. An album
+ * search gets the same card (verified live 2026-11-19 for "michael jackson thriller") with the
+ * header on the album playlist (VL…), no avatar, and the cover as the hero image.
  */
 function universalCardSections(card: Record<string, unknown>): WireSection[] {
   const sections: WireSection[] = [];
@@ -710,7 +711,25 @@ function universalCardSections(card: Record<string, unknown>): WireSection[] {
   const artistTitle = textOf(get(header, "title"));
   const channelId = asString(get(header, "titleNavigationEndpoint", "browseEndpoint", "browseId"));
   const lead: WireFeedItem[] = [];
-  if (artistTitle !== undefined && channelId !== undefined) {
+  if (artistTitle !== undefined && channelId !== undefined && channelId.indexOf("VL") === 0) {
+    const playlistId = channelId.substring(2);
+    const album: WireFeedItem = { "kind": "playlist", "id": playlistId, "title": artistTitle };
+    if (isAlbumPlaylist(playlistId)) album["album"] = true;
+    album["url"] = playlistUrl(playlistId);
+    const thumbs = thumbsOf(
+      get(
+        card,
+        "callToAction",
+        "watchCardHeroVideoRenderer",
+        "heroImage",
+        "singleHeroImageRenderer",
+        "thumbnail",
+      ),
+    );
+    if (thumbs !== undefined) album["thumbs"] = thumbs;
+    setLines(album, [textOf(get(header, "subtitle"))]);
+    lead.push(album);
+  } else if (artistTitle !== undefined && channelId !== undefined) {
     const artist: WireFeedItem = {
       "kind": "channel",
       "id": channelId,
@@ -725,7 +744,6 @@ function universalCardSections(card: Record<string, unknown>): WireSection[] {
     const style = asString(get(header, "titleBadge", "metadataBadgeRenderer", "style")) ?? "";
     if (style.indexOf("VERIFIED_ARTIST") >= 0) artist["ownerBadge"] = "artist";
     else if (style.indexOf("VERIFIED") >= 0) artist["ownerBadge"] = "verified";
-    artist["ctaText"] = "Subscribe";
     lead.push(artist);
   }
   // The hero call-to-action starts the artist radio — surface it as the Mix playlist it plays
@@ -1045,6 +1063,8 @@ export function collectPage(
       // The playlist panel / watch card were pre-extracted — don't re-collect their items.
       if (panelWrapper !== undefined && value === panelWrapper) return true;
       if (cardWrapper !== undefined && value === cardWrapper) return true;
+      // A stream replay's live chat: its Top/Live chat replay selector is a sortFilterSubMenuRenderer.
+      if (key === "conversationBar") return true;
       // A grid container switches the loose section to grid layout (its items render as grid cells).
       if (key === "richGridRenderer" || key === "gridRenderer") {
         looseLayout = "grid";

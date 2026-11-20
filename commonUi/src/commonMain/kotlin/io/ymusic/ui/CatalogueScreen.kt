@@ -67,10 +67,11 @@ fun CatalogueScreen(modifier: Modifier = Modifier) {
     BoxWithConstraints(modifier.fillMaxSize()) {
         val width = maxWidth
         val height = maxHeight
+        val gridFrom = FEED_GRID_MIN_WIDTH.value.toInt()
         val windowClass = when (feedLayoutFor(width)) {
             FeedLayout.SquareList -> "square list (<320)"
-            FeedLayout.WideList -> "16:9 list (320–469)"
-            FeedLayout.Grid -> "grid (≥470)"
+            FeedLayout.WideList -> "16:9 list (320–${gridFrom - 1})"
+            FeedLayout.Grid -> "grid (≥$gridFrom)"
         }
         Column(Modifier.fillMaxSize()) {
             Text(
@@ -140,7 +141,7 @@ private fun CatalogueList() {
         item { FeedListItem(mockVideo, mockActions, onClick = {}) }
         item { FeedListItem(mockLive, mockActions, onClick = {}) }
         item { FeedListItem(mockPlaylist, mockActions, onClick = {}) }
-        item { FeedListItem(mockChannel, ItemActions(emptyList()), onClick = {}) }
+        item { FeedListItem(mockChannel, mockActions, onClick = {}) }
 
         item { CatLabel("FeedListItem wide — 16:9 list form (320–469dp)") }
         item { FeedListItem(mockVideo, mockActions, onClick = {}, wide = true) }
@@ -154,7 +155,7 @@ private fun CatalogueList() {
             CatalogueGridRow { inset ->
                 FeedGridCard(mockVideo, mockActions, onClick = {}, modifier = Modifier.weight(1f), inset = inset)
                 FeedGridCard(mockPlaylist, mockActions, onClick = {}, modifier = Modifier.weight(1f), inset = inset)
-                FeedGridCard(mockChannel, ItemActions(emptyList()), onClick = {}, modifier = Modifier.weight(1f), inset = inset)
+                FeedGridCard(mockChannel, mockActions, onClick = {}, modifier = Modifier.weight(1f), inset = inset)
             }
         }
 
@@ -205,7 +206,7 @@ private fun CatalogueList() {
             }
         }
 
-        item { CatLabel("Chips — FeedChip · QualityChip (dropdown) · CtaPill") }
+        item { CatLabel("Chips — FeedChip · QualityChip (dropdown)") }
         item {
             var chip by remember { mutableStateOf(0) }
             var quality by remember { mutableStateOf("1080p") }
@@ -222,7 +223,6 @@ private fun CatalogueList() {
                     mockQualities,
                     selectedId = mockQualities.firstOrNull { it.second == quality }?.first,
                 ) { id -> quality = mockQualities.first { it.first == id }.second }
-                CtaPill("Subscribe")
             }
         }
 
@@ -325,7 +325,7 @@ private fun CatalogueList() {
         item {
             CatalogueGridRow { inset ->
                 FeedGridCard(mockVideo.copy(thumbs = mockVideoThumbs), mockActions, onClick = {}, modifier = Modifier.weight(1f), inset = inset)
-                FeedGridCard(mockChannel.copy(thumbs = mockAvatarThumbs), ItemActions(emptyList()), onClick = {}, modifier = Modifier.weight(1f), inset = inset)
+                FeedGridCard(mockChannel.copy(thumbs = mockAvatarThumbs), mockActions, onClick = {}, modifier = Modifier.weight(1f), inset = inset)
             }
         }
 
@@ -573,7 +573,6 @@ private val mockChannel = YtFeedItem(
     id = "UClyA28-01x4z60eWQ2kiNbA",
     title = "Sơn Tùng M-TP Official",
     subtitleLine1 = "11.8M subscribers",
-    ctaText = "Subscribe",
     channelId = "UClyA28-01x4z60eWQ2kiNbA",
 )
 

@@ -975,11 +975,11 @@ let loopAtEnd: (() => void) | null = null;
 export function onLoopAtEnd(fn: (() => void) | null): void {
   loopAtEnd = fn;
 }
-let mediaTick: ReturnType<typeof setTimeout> | null = null;
+let mediaTick: ReturnType<typeof setInterval> | null = null;
 
 function stopMediaTick(): void {
   if (mediaTick != null) {
-    clearTimeout(mediaTick);
+    clearInterval(mediaTick);
     mediaTick = null;
   }
 }
@@ -1022,16 +1022,18 @@ onEvent("mse_ended", function () {
   if (el) maybeFireEnded(el);
 });
 
+// An interval, not a timeout chain: hosts run a hidden app's intervals at most once a second.
 function startMediaTick(el: HTMLMediaElement): void {
   stopMediaTick();
-  function pulse(): void {
-    if (el["paused"] || el["ended"]) return;
+  mediaTick = setInterval(function () {
+    if (el["paused"] || el["ended"]) {
+      stopMediaTick();
+      return;
+    }
     if (maybeFireEnded(el)) return;
     fire(el, "timeupdate");
     syncReadyState(el);
-    mediaTick = setTimeout(pulse, 250);
-  }
-  mediaTick = setTimeout(pulse, 250);
+  }, 250);
 }
 
 function emptyTrackList(): Record<string, unknown> {
@@ -1055,7 +1057,7 @@ function initHtmlMedia(self: HTMLMediaElement): void {
   self._stalled = false;
   self._looped = false;
   self["muted"] = false;
-  self["volume"] = 1;
+  self._volume = 1;
   self._rate = 1;
   self._tempo = 1;
   self._pitch = 1;
@@ -1078,7 +1080,7 @@ class HTMLMediaElement {
   _stalled!: boolean;
   _looped!: boolean;
   ["muted"]!: boolean;
-  ["volume"]!: number;
+  _volume!: number;
   _rate!: number;
   _tempo!: number;
   _pitch!: number;
@@ -1103,6 +1105,15 @@ class HTMLMediaElement {
     if (!list) return;
     const i = list.indexOf(fn);
     if (i >= 0) list.splice(i, 1);
+  }
+
+  get ["volume"](): number {
+    return this._volume;
+  }
+  // Fires even when unchanged: a swapped-in element keeps its own value but the host's gain is stale.
+  set ["volume"](v: number) {
+    this._volume = v;
+    fire(this, "volumechange");
   }
 
   get ["videoWidth"](): number {
@@ -1517,8 +1528,6 @@ export function installMseGlobals(): void {
   glob["MediaSource"] = MediaSource;
   glob["SourceBuffer"] = SourceBuffer;
   glob["HTMLMediaElement"] = HTMLMediaElement;
-  glob["HTMLVideoElement"] = HTMLMediaElement;
-  glob["HTMLAudioElement"] = HTMLMediaElement;
   (HTMLMediaElement as unknown as Record<string, unknown>)["attach"] = attachHtmlMedia;
   (HTMLMediaElement as unknown as Record<string, unknown>)["main"] = null;
   const Url = glob["URL"];

@@ -62,6 +62,7 @@ import io.ymusic.ui.registerCompletedDownload
 import io.ymusic.ui.sponsorblock.SqliteSponsorBlockStore
 import io.ymusic.ui.sponsorblock.sponsorBlockNativeDriver
 import io.ymusic.ui.startupFailedMessage
+import io.ymusic.ytmedia.YOUTUBE_USER_AGENT
 import io.ymusic.ytmedia.cache.DiskMediaBlobCache
 import io.ymusic.ytmedia.cache.MediaCache
 import io.ymusic.ytmedia.cache.SqlDelightBlobIndex
@@ -85,6 +86,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.newSingleThreadContext
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonElement
 import okio.FileSystem
 import okio.Path.Companion.toPath
 import platform.Foundation.NSApplicationSupportDirectory
@@ -184,33 +186,6 @@ private suspend fun buildIosGraph(container: UIView): AppGraph {
     )
     val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val appVersionCode = (NSBundle.mainBundle.objectForInfoDictionaryKey("CFBundleVersion") as? String)?.toIntOrNull() ?: -1
-    val engines = DynamicEngineManager(
-        http.engine,
-        appVersion = appVersionCode,
-        jsSource = embeddedEngineJsSource(),
-        logger = rootLogger,
-        cookieJar = cookies,
-        settings = settings,
-        cacheStore = cacheStore,
-        strictStints = DEBUG_BUILD,
-        onBackendVersion = { version ->
-            runningBundles.engine = version
-            backgroundScope.launch { settings.put(AppSettings.lastLoadedEngineJsVer, version) }
-        },
-    )
-    engines.start()
-
-    val cacheRoot = (NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, true).first() as String)
-        .toPath()
-        .resolve("ymusic-images")
-    val imageLoader = ImageLoader(
-        fetchers = listOf(
-            networkFetcher(http.image, FileSystem.SYSTEM, cacheRoot.resolve("source")),
-            fileFetcher(),
-        ),
-        scaledCache = DiskScaledImageCache(FileSystem.SYSTEM, cacheRoot.resolve("scaled")),
-    )
-
     // The one client of the YMusic service; null when this build has no service url. Versions come
     // from Info.plist, the same values the App Store sees.
     val now = { (NSDate().timeIntervalSince1970 * 1000).toLong() }
@@ -245,6 +220,37 @@ private suspend fun buildIosGraph(container: UIView): AppGraph {
         now = now,
         log = rootLogger.fork("remote-config"),
     ).also { it.checkUpdate() }
+    val remoteFeature: suspend (String) -> JsonElement? = { key ->
+        remoteConfig.awaitLoaded().features.getByKey(key)
+    }
+    val engines = DynamicEngineManager(
+        http.engine,
+        appVersion = appVersionCode,
+        jsSource = embeddedEngineJsSource(),
+        logger = rootLogger,
+        cookieJar = cookies,
+        settings = settings,
+        remoteFeature = remoteFeature,
+        cacheStore = cacheStore,
+        strictStints = DEBUG_BUILD,
+        onBackendVersion = { version ->
+            runningBundles.engine = version
+            backgroundScope.launch { settings.put(AppSettings.lastLoadedEngineJsVer, version) }
+        },
+    )
+    engines.start()
+
+    val cacheRoot = (NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, true).first() as String)
+        .toPath()
+        .resolve("ymusic-images")
+    val imageLoader = ImageLoader(
+        fetchers = listOf(
+            networkFetcher(http.image, FileSystem.SYSTEM, cacheRoot.resolve("source")),
+            fileFetcher(),
+        ),
+        scaledCache = DiskScaledImageCache(FileSystem.SYSTEM, cacheRoot.resolve("scaled")),
+    )
+
     backgroundScope.launch {
         // The cap waits for the loaded config: the store trims nothing until it has one.
         remoteConfig.awaitLoaded()
@@ -286,7 +292,8 @@ private suspend fun buildIosGraph(container: UIView): AppGraph {
             cookieJar = cookies
             defaultRedirectOptions = RedirectOptions(followRedirects = true, followSslRedirects = true)
         },
-        userAgent = MSE_CHROME_UA,
+        userAgent = YOUTUBE_USER_AGENT,
+        cacheEnabled = { remoteConfig.config.value.features.playerCacheEnabled },
     )
 
     val mseHole = IosMseHole()
@@ -298,6 +305,7 @@ private suspend fun buildIosGraph(container: UIView): AppGraph {
         cacheStore = cacheStore,
         cookieJar = cookies,
         settings = settings,
+        remoteFeature = remoteFeature,
         videoSurface = mseSurface,
         main = engines,
         mediaProxy = mediaProxy,
@@ -334,7 +342,7 @@ private suspend fun buildIosGraph(container: UIView): AppGraph {
             cookieJar = cookies
             defaultRedirectOptions = RedirectOptions(followRedirects = false, followSslRedirects = false)
         },
-        userAgent = MSE_CHROME_UA,
+        userAgent = YOUTUBE_USER_AGENT,
         ffmpeg = null,
         nativeMediaMuxer = object : NativeMediaMuxer {
             private val dispatcher = newSingleThreadContext("download-mux")
@@ -411,7 +419,3 @@ private suspend fun buildIosGraph(container: UIView): AppGraph {
     IosPipHost.mse = msePlayer
     return graph
 }
-
-private const val MSE_CHROME_UA =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
-        "(KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
